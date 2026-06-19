@@ -1,0 +1,5 @@
+.auth/
+output/
+projects/*/output/
+node_modules/
+.env
