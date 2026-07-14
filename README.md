@@ -185,3 +185,29 @@ BMW	X5
 ## 说明
 
 4AFitment 页面通常需要登录。如果登录过期，重新运行登录脚本即可。
+
+## Amazon.de 五级车型弹窗
+
+Amazon.de 商品页车型弹窗的 Python 遍历脚本也已合并到本项目：
+
+```powershell
+python -m pip install -r requirements-amazon.txt
+python .\amazon_de_fitment_scraper.py
+```
+
+当前结果保存在 `output\amazon_de_vehicles.csv`，再次运行会读取已有 CSV、跳过
+重复组合并继续追加。完整参数和操作说明见 `AMAZON_FITMENT_README.md`。
+
+## Auto.ru 车型长宽高
+
+Auto.ru 汽车目录的 Python 遍历脚本会按“品牌 → 车型 → 规格行”抓取长、宽、高，
+并逐行保存为 TSV：
+
+```powershell
+python -m pip install -r requirements-auto-ru.txt
+python .\auto_ru_dimensions_scraper.py --brand 212 --max-models 1
+python .\auto_ru_dimensions_scraper.py
+```
+
+结果和断点进度默认保存在 `tsv` 目录。完整字段、验证码处理和参数说明见
+`AUTO_RU_DIMENSIONS_README.md`。
