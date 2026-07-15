@@ -6,4 +6,5 @@ projects/*/output/
 tsv/*
 !tsv/.gitkeep
 node_modules/
+.venv/
 .env
