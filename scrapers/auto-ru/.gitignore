@@ -1,0 +1,8 @@
+.auto_ru_selenium_profile/
+__pycache__/
+.venv/
+.env
+tsv/*
+!tsv/.gitkeep
+!tsv/auto_ru_dimensions.tsv
+!tsv/auto_ru_dimensions.checkpoint.json

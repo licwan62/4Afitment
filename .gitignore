@@ -1,9 +1,4 @@
-.auth/
-.amazon_selenium_profile/
-.auto_ru_selenium_profile/
-output/
-projects/*/output/
-tsv/*
-!tsv/.gitkeep
-node_modules/
-.env
+.uv-cache-test/
+**/.env
+**/__pycache__/
+**/node_modules/

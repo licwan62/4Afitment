@@ -1,0 +1,17 @@
+{
+  "name": "fitment-sheet-generation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Scrape year, manufacturer, and model fitment data from 4AFitment vehicle compatibility dropdowns.",
+  "type": "module",
+  "scripts": {
+    "login": "node src/login.js",
+    "scrape": "node src/scrape.js",
+    "scrape:tsv": "node src/scrape-from-tsv.js",
+    "merge": "node src/merge-md-to-tsv.js",
+    "inspect": "node src/inspect.js"
+  },
+  "dependencies": {
+    "playwright": "^1.0.0"
+  }
+}

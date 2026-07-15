@@ -1,0 +1,41 @@
+{
+  "startUrl": "https://car.4afitment.com/search/vc",
+  "headless": false,
+  "slowMoMs": 80,
+  "projectsDir": "projects",
+  "outputDir": "output",
+  "inputTsvFile": "input/carlist.tsv",
+  "checkpointFile": "output/checkpoint.json",
+  "markdownFile": "output/fitment_data.md",
+  "tsvCheckpointFile": "output/from_tsv_checkpoint.json",
+  "tsvMarkdownFile": "output/from_tsv.md",
+  "tsvSummaryFile": "output/from_tsv_summary.md",
+  "requestLogFile": "output/network.jsonl",
+  "authProfileDir": ".auth/profile",
+  "yearRange": {
+    "from": "1896",
+    "to": "2027"
+  },
+  "selectors": {
+    "yearFrom": [],
+    "yearTo": [],
+    "manufacturer": [],
+    "model": [],
+    "searchButton": [],
+    "copyButton": []
+  },
+  "labels": {
+    "year": ["year", "年份"],
+    "yearFrom": ["from year", "start year", "year from", "开始年份", "起始年份", "年份"],
+    "yearTo": ["to year", "end year", "year to", "结束年份", "截止年份", "年份"],
+    "manufacturer": ["manufacturer", "make", "brand", "制造商", "品牌", "厂商"],
+    "model": ["model", "车型"],
+    "searchButton": ["search", "查询", "搜索"],
+    "copyButton": ["copy vehicle data", "copy fitment", "复制车型数据", "复制"]
+  },
+  "timeouts": {
+    "pageLoadMs": 60000,
+    "dropdownMs": 15000,
+    "settleMs": 700
+  }
+}
