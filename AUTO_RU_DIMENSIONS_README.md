@@ -65,5 +65,33 @@ python .\auto_ru_dimensions_scraper.py --brand 212 --max-models 1
 python .\auto_ru_dimensions_scraper.py --brand BMW --brand Audi
 ```
 
-再次运行同一命令会读取已有 TSV 和 checkpoint，跳过已经完成的车型。全量目录较大，
-建议保留默认的每页 1 秒间隔；遇到限流或验证码时不要提高请求频率。
+## 遍历速度和冷却
+
+`--delay` 控制每次页面加载后的固定间隔；`--cooldown-every` 和
+`--cooldown-seconds` 控制周期性长冷却。默认每页等待 1 秒，并且每完成 25 个车型冷却
+30 秒：
+
+```powershell
+python .\auto_ru_dimensions_scraper.py --delay 2 --cooldown-every 20 --cooldown-seconds 60
+```
+
+关闭周期性长冷却，但保留每页间隔：
+
+```powershell
+python .\auto_ru_dimensions_scraper.py --delay 2 --cooldown-every 0
+```
+
+这些参数用于降低访问频率和服务器负载，不会自动规避或代答网站验证。
+
+再次运行同一命令时，脚本会读取已有 TSV 的最后一条品牌，直接把品牌列表切到该位置，
+然后用 checkpoint 跳过该品牌内已经完成的车型，不再从第一个品牌逐个检查。若 TSV 中的
+品牌不在本次品牌列表（例如改用了 `--brand`），会安全回退为从头检查。
+
+如果需要恢复从第一个品牌开始检查的旧行为（例如要重试游标之前记录在 errors log 中的
+失败项），使用：
+
+```powershell
+python .\auto_ru_dimensions_scraper.py --resume-from-start
+```
+
+全量目录较大，建议保留默认的每页 1 秒间隔；遇到限流或验证码时不要提高请求频率。

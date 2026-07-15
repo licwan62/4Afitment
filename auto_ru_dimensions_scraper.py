@@ -97,6 +97,19 @@ def canonical_url(url: str) -> str:
     return urlunsplit((parts.scheme or "https", parts.netloc, path, "", ""))
 
 
+def slice_brands_from_output(
+    brands: list[CatalogLink], last_output_brand: str
+) -> tuple[list[CatalogLink], int]:
+    """Return the brand list starting at the last brand written to the TSV."""
+    target = clean_text(last_output_brand).casefold()
+    if not target:
+        return brands, 0
+    for index, brand in enumerate(brands):
+        if clean_text(brand.name).casefold() == target:
+            return brands[index:], index
+    return brands, -1
+
+
 class AutoRuDimensionsScraper:
     def __init__(self, driver: webdriver.Chrome, args: argparse.Namespace) -> None:
         self.driver = driver
@@ -113,6 +126,7 @@ class AutoRuDimensionsScraper:
         self.tsv_writer: csv.DictWriter | None = None
         self.total_rows = 0
         self.processed_models = 0
+        self.last_output_brand = ""
 
     def run(self) -> None:
         self._prepare_output_schema()
@@ -130,6 +144,23 @@ class AutoRuDimensionsScraper:
             brands = self._filter_brands(brands)
             if not brands:
                 raise RuntimeError("未发现品牌链接；请用 --inspect-url 检查页面或处理验证码")
+            if not self.args.resume_from_start and self.last_output_brand:
+                resumed_brands, skipped_count = slice_brands_from_output(
+                    brands, self.last_output_brand
+                )
+                if skipped_count > 0:
+                    brands = resumed_brands
+                    print(
+                        f"断点直达：TSV 最后一条是 {self.last_output_brand}，"
+                        f"直接跳过前面 {skipped_count} 个品牌",
+                        flush=True,
+                    )
+                elif skipped_count < 0:
+                    print(
+                        f"断点品牌 {self.last_output_brand} 不在本次品牌列表中，"
+                        "安全回退为从头检查",
+                        flush=True,
+                    )
             print(f"[2/4] 发现 {len(brands)} 个待遍历品牌")
             print("[3/4] 开始逐品牌读取车型规格……")
 
@@ -175,6 +206,7 @@ class AutoRuDimensionsScraper:
                             f"累计 {self.total_rows}",
                             flush=True,
                         )
+                        self._maybe_cooldown()
                     except KeyboardInterrupt:
                         self._write_checkpoint()
                         raise
@@ -434,6 +466,19 @@ class AutoRuDimensionsScraper:
             self.args.max_models and self.processed_models >= self.args.max_models
         )
 
+    def _maybe_cooldown(self) -> None:
+        every = self.args.cooldown_every
+        seconds = self.args.cooldown_seconds
+        if not every or seconds <= 0 or self.processed_models % every != 0:
+            return
+        if self._limit_reached():
+            return
+        print(
+            f"已完成 {self.processed_models} 个车型，冷却 {seconds:g} 秒……",
+            flush=True,
+        )
+        time.sleep(seconds)
+
     def _prepare_output_schema(self) -> None:
         """安全归档缺少 body_type 的旧结果，防止新旧表头混写。"""
         if not self.output.exists() or self.output.stat().st_size == 0:
@@ -483,6 +528,9 @@ class AutoRuDimensionsScraper:
                 key = tuple(row[name] for name in FIELD_NAMES)
                 self.seen.add(key)
                 self.total_rows += 1
+                brand = clean_text(row.get("brand"))
+                if brand:
+                    self.last_output_brand = brand
         print(f"断点续跑：已读取 {self.total_rows} 条历史 TSV 记录")
 
     def _load_checkpoint(self) -> None:
@@ -582,9 +630,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--brand", action="append", help="只抓指定品牌名或 URL slug，可重复传入"
     )
+    parser.add_argument(
+        "--resume-from-start",
+        action="store_true",
+        help="忽略 TSV 最后品牌，从品牌列表开头逐个检查",
+    )
     parser.add_argument("--max-models", type=int, default=0, help="本次最多完成车型数")
     parser.add_argument("--timeout", type=float, default=25, help="页面等待秒数")
-    parser.add_argument("--delay", type=float, default=1.0, help="每页完成后的礼貌等待秒数")
+    parser.add_argument(
+        "--delay", type=float, default=1.0, help="每个页面加载完成后的固定间隔秒数"
+    )
+    parser.add_argument(
+        "--cooldown-every",
+        type=int,
+        default=25,
+        help="每完成多少个车型进行一次长冷却，0 表示关闭",
+    )
+    parser.add_argument(
+        "--cooldown-seconds",
+        type=float,
+        default=30.0,
+        help="每次长冷却的秒数，默认 30 秒",
+    )
     parser.add_argument("--retries", type=int, default=2, help="页面加载失败重试次数")
     parser.add_argument("--headless", action="store_true", help="无界面运行")
     parser.add_argument(
@@ -599,7 +666,14 @@ def parse_args() -> argparse.Namespace:
         help="Chrome 独立用户数据目录",
     )
     parser.add_argument("--keep-open", action="store_true", help="完成后不关闭浏览器")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.delay < 0:
+        parser.error("--delay 不能小于 0")
+    if args.cooldown_every < 0:
+        parser.error("--cooldown-every 不能小于 0")
+    if args.cooldown_seconds < 0:
+        parser.error("--cooldown-seconds 不能小于 0")
+    return args
 
 
 def make_driver(args: argparse.Namespace) -> webdriver.Chrome:
