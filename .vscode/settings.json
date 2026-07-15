@@ -1,5 +1,8 @@
 {
+    "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+    "python.terminal.activateEnvironment": true,
     "powerquery.client.additionalSymbolsDirectories": [
-        "d:/Home/Scripts/4Afitment/.vscode/excel-pq-symbols"
+        "d:/Home/Scripts/4Afitment/.vscode/excel-pq-symbols",
+        "d:/Licheng/Repo/4Afitment/.vscode/excel-pq-symbols"
     ]
 }
