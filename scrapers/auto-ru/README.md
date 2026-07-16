@@ -84,6 +84,27 @@ python .\auto_ru_dimensions_scraper.py --brand BMW --brand Audi
 python .\auto_ru_dimensions_scraper.py --delay 10 --cooldown-every 20 --cooldown-seconds 20
 ```
 
+脚本支持的全部命令行参数如下，其中访问频率相关的三项已标出推荐值：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--url <网址>` | Auto.ru 汽车目录 | 起始目录网址 |
+| `--output <路径>` | `tsv/auto_ru_dimensions.tsv` | 输出 TSV 路径 |
+| `--checkpoint <路径>` | 与 TSV 同目录 | 自定义 checkpoint 路径 |
+| `--brand <品牌>` | 不限 | 只抓指定品牌名或 URL slug；可重复传入 |
+| `--resume-from-start` | 关闭 | 忽略 TSV 最后品牌，从品牌列表开头检查 |
+| `--max-models <数量>` | `0` | 本次最多完成的车型数；`0` 表示不限 |
+| `--timeout <秒>` | `25` | 页面等待时间 |
+| `--delay <秒>` | `1` | 每页加载后的固定间隔；推荐 `10` |
+| `--cooldown-every <数量>` | `25` | 每完成多少个车型长冷却一次；推荐 `20`，`0` 表示关闭 |
+| `--cooldown-seconds <秒>` | `30` | 每次长冷却时间；推荐 `20` |
+| `--retries <数量>` | `2` | 页面加载失败重试次数 |
+| `--profile-dir <路径>` | `.auto_ru_selenium_profile` | Chrome 独立用户数据目录 |
+| `--inspect-url <网址>` | 无 | 只检查一个目录、品牌或规格页面 |
+| `--no-start-pause` | 关闭 | 首次打开网页后直接开始，不等待 Enter |
+| `--headless` | 关闭 | 使用无界面模式运行 |
+| `--keep-open` | 关闭 | 完成后不关闭浏览器 |
+
 关闭周期性长冷却，但保留每页间隔：
 
 ```powershell

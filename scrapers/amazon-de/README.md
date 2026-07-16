@@ -35,6 +35,20 @@ python .\amazon_de_fitment_scraper.py --inspect
 python .\amazon_de_fitment_scraper.py
 ```
 
+推荐直接使用以上默认参数。脚本支持的全部命令行参数如下：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--url <网址>` | 脚本内置商品页 | Amazon 商品网址 |
+| `--output <路径>` | `output/amazon_de_vehicles.csv` | 输出 CSV 路径 |
+| `--timeout <秒>` | `20` | 等待页面控件的最长时间 |
+| `--delay <秒>` | `0.55` | 每次选择后的等待时间 |
+| `--max-rows <数量>` | `0` | 最多新增/保留的行数；`0` 表示不限 |
+| `--profile-dir <路径>` | `.amazon_selenium_profile` | Chrome 独立用户数据目录 |
+| `--inspect` | 关闭 | 只检查控件，不正式遍历 |
+| `--headless` | 关闭 | 使用无界面模式运行 |
+| `--keep-open` | 关闭 | 完成后不自动关闭浏览器 |
+
 遍历顺序为：
 
 1. Vehicle Type
