@@ -6,3 +6,5 @@ tsv/*
 !tsv/.gitkeep
 !tsv/auto_ru_dimensions.tsv
 !tsv/auto_ru_dimensions.checkpoint.json
+!tsv/auto_ru_catalog_rank.tsv
+!tsv/auto_ru_catalog_rank.checkpoint.json
