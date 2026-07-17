@@ -1,0 +1,12 @@
+{"time": "2026-07-17 13:57:16", "level": "info", "event": "run_started", "url": "", "detail": {"input_models": 2, "completed_models": 0, "pending_models": 2}}
+{"time": "2026-07-17 13:57:42", "level": "info", "event": "model_completed", "url": "https://auto.ru/catalog/cars/vaz/granta/", "detail": {"parsed_rows": 10, "saved_rows": 10}}
+{"time": "2026-07-17 13:57:44", "level": "warning", "event": "no_sales_rows", "url": "https://auto.ru/catalog/cars/tenet/t7/", "detail": "车型页没有可输出的 generation + type 数据；按正常完成处理"}
+{"time": "2026-07-17 13:57:44", "level": "info", "event": "model_completed", "url": "https://auto.ru/catalog/cars/tenet/t7/", "detail": {"parsed_rows": 0, "saved_rows": 0}}
+{"time": "2026-07-17 14:12:37", "level": "info", "event": "run_started", "url": "", "detail": {"input_models": 5, "completed_models": 0, "pending_models": 5}}
+{"time": "2026-07-17 14:14:49", "level": "info", "event": "model_completed", "url": "https://auto.ru/catalog/cars/vaz/granta/", "detail": {"parsed_rows": 10, "saved_rows": 10}}
+{"time": "2026-07-17 14:14:53", "level": "warning", "event": "no_sales_rows", "url": "https://auto.ru/catalog/cars/tenet/t7/", "detail": "车型页没有可输出的 generation + type 数据；按正常完成处理"}
+{"time": "2026-07-17 14:14:53", "level": "info", "event": "model_completed", "url": "https://auto.ru/catalog/cars/tenet/t7/", "detail": {"parsed_rows": 0, "saved_rows": 0}}
+{"time": "2026-07-17 14:14:56", "level": "warning", "event": "sale_detail_missing", "url": "https://auto.ru/catalog/cars/ford/focus/", "detail": {"configuration_index": 3, "type": "Седан", "raw_text": ""}}
+{"time": "2026-07-17 14:14:56", "level": "info", "event": "model_completed", "url": "https://auto.ru/catalog/cars/ford/focus/", "detail": {"parsed_rows": 3, "saved_rows": 3}}
+{"time": "2026-07-17 14:14:58", "level": "info", "event": "model_completed", "url": "https://auto.ru/catalog/cars/vaz/vesta/", "detail": {"parsed_rows": 8, "saved_rows": 8}}
+{"time": "2026-07-17 14:15:01", "level": "info", "event": "model_completed", "url": "https://auto.ru/catalog/cars/kia/rio/", "detail": {"parsed_rows": 2, "saved_rows": 2}}

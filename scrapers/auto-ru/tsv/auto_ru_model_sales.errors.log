@@ -1,0 +1,9 @@
+{"time": "2026-07-17 10:56:52", "url": "https://auto.ru/catalog/cars/tenet/t7/", "error": "RuntimeError: 指定的代际容器中未找到 body_type 和 sale_detail"}
+{"time": "2026-07-17 11:45:49", "url": "https://auto.ru/catalog/cars/tenet/t7/", "error": "RuntimeError: 指定的代际容器中未找到 body_type 和 sale_detail"}
+{"time": "2026-07-17 11:55:54", "url": "https://auto.ru/catalog/cars/tenet/t7/", "error": "RuntimeError: 指定的代际容器中未找到 body_type 和 sale_detail"}
+{"time": "2026-07-17 11:55:57", "url": "https://auto.ru/catalog/cars/ford/focus/", "error": "RuntimeError: 指定的代际容器中未找到 body_type 和 sale_detail"}
+{"time": "2026-07-17 11:56:37", "url": "https://auto.ru/catalog/cars/kia/rio/", "error": "RuntimeError: 指定的代际容器中未找到 body_type 和 sale_detail"}
+{"time": "2026-07-17 11:56:39", "url": "https://auto.ru/catalog/cars/haval/jolion/", "error": "RuntimeError: 指定的代际容器中未找到 body_type 和 sale_detail"}
+{"time": "2026-07-17 11:56:42", "url": "https://auto.ru/catalog/cars/toyota/camry/", "error": "RuntimeError: 指定的代际容器中未找到 body_type 和 sale_detail"}
+{"time": "2026-07-17 12:52:37", "url": "https://auto.ru/catalog/cars/tenet/t7/", "error": "RuntimeError: 代际列表中未找到 gallery 链接和在售配置"}
+{"time": "2026-07-17 13:06:12", "url": "https://auto.ru/catalog/cars/tenet/t7/", "error": "RuntimeError: 代际列表中未找到 gallery 链接和在售配置"}
