@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Read Auto.ru model URLs and extract model summary and body-type sales data."""
+"""Extract Auto.ru generation/type sales counts from model pages."""
 
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
@@ -24,13 +25,82 @@ from selenium.webdriver.support.ui import WebDriverWait
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_INPUT = PROJECT_ROOT / "tsv" / "auto_ru_catalog_rank.tsv"
 DEFAULT_OUTPUT = PROJECT_ROOT / "tsv" / "auto_ru_model_sales.tsv"
+DEFAULT_LOG = PROJECT_ROOT / "log" / "auto_ru_model_sales.log"
 
 SECTION_XPATH = "/html/body/div[1]/div/div/div[5]/div/div[2]/div[1]/section"
 GENERATIONS_ROOT_XPATH = (
-    "/html/body/div[1]/div/div/div[5]/div/div[2]/div[1]/div/div[1]/div[2]/div"
+    "//div[@data-seo='generation-list']"
 )
+CONFIGURATIONS_LIST_XPATH = (
+    ".//div[contains(@class, 'CatalogGenerationsListItem__configurationsList-')]"
+)
+GENERATION_TITLE_XPATH = (
+    ".//*[contains(@class, 'CatalogGenerationsListItem__title-')]"
+)
+SCHEMA_VERSION = 11
 
 FIELD_NAMES = (
+    "Model",
+    "link_url",
+    "generation",
+    "Years",
+    "type",
+    "sale_detail",
+)
+SALES_WITH_RANK_FIELD_NAMES = ("Rank", *FIELD_NAMES)
+SALES_WITHOUT_YEARS_FIELD_NAMES = (
+    "Rank",
+    "Model",
+    "link_url",
+    "generation",
+    "type",
+    "sale_detail",
+)
+IMAGE_TYPE_FIELD_NAMES = (
+    "Rank",
+    "Model",
+    "link_url",
+    "generation",
+    "type",
+    "sale_detail",
+    "body_type_url",
+    "main_image_url",
+    "side_image_url",
+    "front_image_url",
+    "back_image_url",
+    "3_4_behind_image_url",
+    "remark",
+)
+BODY_TYPE_FIELD_NAMES = (
+    "Rank",
+    "Model",
+    "link_url",
+    "generation",
+    "body_type",
+    "sale_detail",
+    "body_type_url",
+    "main_image_url",
+    "side_image_url",
+    "front_image_url",
+    "back_image_url",
+    "3_4_behind_image_url",
+    "remark",
+)
+NO_BODY_TYPE_FIELD_NAMES = (
+    "Rank",
+    "Model",
+    "link_url",
+    "generation",
+    "sale_detail",
+    "body_type_url",
+    "main_image_url",
+    "side_image_url",
+    "front_image_url",
+    "back_image_url",
+    "3_4_behind_image_url",
+    "remark",
+)
+LEGACY_FIELD_NAMES = (
     "Rank",
     "Model",
     "link_url",
@@ -52,6 +122,47 @@ def canonical_url(url: str) -> str:
     if not path.endswith("/"):
         path += "/"
     return urlunsplit((parts.scheme or "https", parts.netloc, path, "", ""))
+
+
+def generation_and_years(generation_node: WebElement) -> tuple[str, str]:
+    """Extract generation descriptor and normalized years from the title spans."""
+    title_nodes = generation_node.find_elements(By.XPATH, GENERATION_TITLE_XPATH)
+    if not title_nodes:
+        return "", ""
+
+    title_node = title_nodes[0]
+    spans = title_node.find_elements(By.XPATH, "self::span | .//span")
+    span_texts = []
+    for span in spans:
+        span_text = clean_text(
+            span.get_attribute("textContent") or span.text
+        )
+        if span_text:
+            span_texts.append(span_text)
+    full_text = clean_text(
+        title_node.get_attribute("textContent")
+        or title_node.text
+        or " ".join(span_texts)
+    )
+
+    year_match = re.search(
+        r"(?i)(?:[сc]\s*)?(?:19|20)\d{2}"
+        r"(?:\s*[-–—]\s*(?:(?:19|20)\d{2}|н\.?\s*в\.?))?"
+        r"\s*(?:года?|гг\.?)?",
+        full_text,
+    )
+    years = clean_text(year_match.group(0)) if year_match else ""
+
+    generation_parts = [text for text in span_texts if not re.search(r"\d{4}", text)]
+    generation = clean_text(" ".join(generation_parts))
+    if not generation:
+        generation = (
+            full_text[: year_match.start()] + " " + full_text[year_match.end() :]
+            if year_match
+            else full_text
+        )
+        generation = clean_text(generation)
+    return generation, years
 
 
 @dataclass(frozen=True)
@@ -118,7 +229,7 @@ class AutoRuModelSalesScraper:
         self.checkpoint = Path(
             args.checkpoint or self.output.with_suffix(".checkpoint.json")
         ).resolve()
-        self.error_log = self.output.with_suffix(".errors.log")
+        self.log_path = Path(args.log).resolve()
         self.completed_urls: set[str] = set()
         self.seen_rows: set[tuple[str, ...]] = set()
         self.total_rows = 0
@@ -127,6 +238,7 @@ class AutoRuModelSalesScraper:
         self.tsv_writer: csv.DictWriter | None = None
 
     def run(self) -> None:
+        self._prepare_output_schema()
         self._load_existing_rows()
         self._load_checkpoint()
         pending = [m for m in self.models if m.link_url not in self.completed_urls]
@@ -138,14 +250,32 @@ class AutoRuModelSalesScraper:
             f"本次待处理：{len(pending)}",
             flush=True,
         )
+        self._log_event(
+            "info",
+            "run_started",
+            "",
+            {
+                "input_models": len(self.models),
+                "completed_models": len(self.completed_urls),
+                "pending_models": len(pending),
+            },
+        )
         self._open_tsv()
         try:
             for index, model in enumerate(pending, 1):
                 try:
-                    self._open_page(model.link_url, pause_after_load=(index == 1))
+                    self._open_page(
+                        model.link_url,
+                        pause_after_load=(index == 1),
+                    )
                     rows = self._extract_rows(model)
                     if not rows:
-                        raise RuntimeError("指定的代际容器中未找到 body_type 和 sale_detail")
+                        self._log_event(
+                            "warning",
+                            "no_sales_rows",
+                            model.link_url,
+                            "车型页没有可输出的 generation + type 数据；按正常完成处理",
+                        )
                     saved = sum(self._save_row(row) for row in rows)
                     self.completed_urls.add(model.link_url)
                     self.processed_models += 1
@@ -154,6 +284,12 @@ class AutoRuModelSalesScraper:
                         f"[{index}/{len(pending)}] {model.model or model.link_url}："
                         f"解析 {len(rows)} 行，新增 {saved} 行",
                         flush=True,
+                    )
+                    self._log_event(
+                        "info",
+                        "model_completed",
+                        model.link_url,
+                        {"parsed_rows": len(rows), "saved_rows": saved},
                     )
                 except KeyboardInterrupt:
                     self._write_checkpoint()
@@ -172,7 +308,12 @@ class AutoRuModelSalesScraper:
 
         print(f"完成：{self.output}（累计 {self.total_rows} 行）")
 
-    def _open_page(self, url: str, pause_after_load: bool = False) -> None:
+    def _open_page(
+        self,
+        url: str,
+        pause_after_load: bool = False,
+        required_xpath: str | None = None,
+    ) -> None:
         last_error: Exception | None = None
         for attempt in range(1, self.args.retries + 2):
             try:
@@ -186,9 +327,10 @@ class AutoRuModelSalesScraper:
                 self._wait_for_challenge()
                 if self.args.delay:
                     time.sleep(self.args.delay)
-                self.wait.until(
-                    lambda d: d.find_elements(By.XPATH, GENERATIONS_ROOT_XPATH)
-                )
+                if required_xpath:
+                    self.wait.until(
+                        lambda d: d.find_elements(By.XPATH, required_xpath)
+                    )
                 return
             except (TimeoutException, WebDriverException) as exc:
                 last_error = exc
@@ -221,44 +363,128 @@ class AutoRuModelSalesScraper:
 
     def _extract_rows(self, model: ModelInput) -> list[dict[str, str]]:
         section_nodes = self.driver.find_elements(By.XPATH, SECTION_XPATH)
-        section = clean_text(section_nodes[0].text) if section_nodes else ""
         model_name = model.model or self._model_name(section_nodes)
 
         roots = self.driver.find_elements(By.XPATH, GENERATIONS_ROOT_XPATH)
         if not roots:
+            self._log_event(
+                "warning",
+                "generation_list_missing",
+                model.link_url,
+                f"未找到 {GENERATIONS_ROOT_XPATH}",
+            )
             return []
 
         result: list[dict[str, str]] = []
-        for generation_node in roots[0].find_elements(By.XPATH, "./div"):
-            body_rows = generation_node.find_elements(By.XPATH, "./div[3]/div")
-            if not body_rows:
-                body_rows = generation_node.find_elements(
-                    By.XPATH, ".//div[./div/div/a and ./div/div/span]"
+        seen_generation_body_types: set[tuple[str, str, str]] = set()
+        generation_nodes = roots[0].find_elements(By.XPATH, "./div")
+        for generation_node in generation_nodes:
+            generation, years = generation_and_years(generation_node)
+            if not generation and not years:
+                self._log_event(
+                    "warning",
+                    "generation_title_missing",
+                    model.link_url,
+                    f"未找到 {GENERATION_TITLE_XPATH} 或其中 span 没有可解析文本",
                 )
-            generation = self._generation_text(generation_node, body_rows)
-            for body_row in body_rows:
-                links = body_row.find_elements(By.XPATH, "./div/div/a")
-                details = body_row.find_elements(By.XPATH, "./div/div/span")
-                if not links:
+            elif not years:
+                title_nodes = generation_node.find_elements(
+                    By.XPATH, GENERATION_TITLE_XPATH
+                )
+                raw_title = (
+                    clean_text(
+                        title_nodes[0].get_attribute("textContent")
+                        or title_nodes[0].text
+                    )
+                    if title_nodes
+                    else ""
+                )
+                self._log_event(
+                    "warning",
+                    "years_missing",
+                    model.link_url,
+                    {"generation": generation, "raw_title": raw_title},
+                )
+            if not generation_node.find_elements(
+                By.XPATH, CONFIGURATIONS_LIST_XPATH
+            ):
+                self._log_event(
+                    "warning",
+                    "configurations_list_missing",
+                    model.link_url,
+                    {"generation": generation, "Years": years},
+                )
+                continue
+            for body_type, sale_detail in self._configuration_details(
+                generation_node
+            ):
+                unique_key = (
+                    generation.casefold(),
+                    years,
+                    body_type.casefold(),
+                )
+                if unique_key in seen_generation_body_types:
                     continue
-                body_type = clean_text(links[0].text)
-                sale_detail = clean_text(details[0].text) if details else ""
-                if not body_type:
-                    continue
-                body_url = clean_text(links[0].get_attribute("href"))
+                seen_generation_body_types.add(unique_key)
                 result.append(
                     {
-                        "Rank": model.rank,
                         "Model": model_name,
                         "link_url": model.link_url,
-                        "section": section,
                         "generation": generation,
-                        "body_type": body_type,
+                        "Years": years,
+                        "type": body_type,
                         "sale_detail": sale_detail,
-                        "body_type_url": urljoin(self.driver.current_url, body_url),
                     }
                 )
         return result
+
+    def _configuration_details(
+        self, generation_node: WebElement
+    ) -> list[tuple[str, str]]:
+        containers = generation_node.find_elements(
+            By.XPATH, CONFIGURATIONS_LIST_XPATH
+        )
+        if not containers:
+            return []
+
+        entries: list[tuple[str, str]] = []
+        for child_index, child in enumerate(
+            containers[0].find_elements(By.XPATH, "./div"), 1
+        ):
+            links = child.find_elements(By.XPATH, ".//a")
+            details = child.find_elements(By.XPATH, ".//span")
+            if not links:
+                self._log_event(
+                    "warning",
+                    "type_link_missing",
+                    self.driver.current_url,
+                    {"configuration_index": child_index},
+                )
+                continue
+            name = clean_text(links[0].text)
+            count_text = clean_text(details[0].text) if details else ""
+            count = re.sub(r"\D", "", count_text)
+            if not name:
+                self._log_event(
+                    "warning",
+                    "type_name_missing",
+                    self.driver.current_url,
+                    {"configuration_index": child_index},
+                )
+                continue
+            if not details or not count:
+                self._log_event(
+                    "warning",
+                    "sale_detail_missing",
+                    self.driver.current_url,
+                    {
+                        "configuration_index": child_index,
+                        "type": name,
+                        "raw_text": count_text,
+                    },
+                )
+            entries.append((name, count))
+        return entries
 
     @staticmethod
     def _model_name(section_nodes: list[WebElement]) -> str:
@@ -266,19 +492,6 @@ class AutoRuModelSalesScraper:
             return ""
         headings = section_nodes[0].find_elements(By.XPATH, ".//h1")
         return clean_text(headings[0].text) if headings else ""
-
-    def _generation_text(
-        self, generation_node: WebElement, body_rows: list[WebElement]
-    ) -> str:
-        headings = generation_node.find_elements(By.XPATH, "./div[2]")
-        if headings:
-            return clean_text(headings[0].text)
-
-        full_text = clean_text(generation_node.text)
-        body_text = " ".join(clean_text(row.text) for row in body_rows)
-        if body_text and full_text.endswith(body_text):
-            full_text = full_text[: -len(body_text)].strip()
-        return full_text
 
     def _load_existing_rows(self) -> None:
         if not self.output.exists() or self.output.stat().st_size == 0:
@@ -291,10 +504,93 @@ class AutoRuModelSalesScraper:
                 self.seen_rows.add(tuple(row.get(name, "") for name in FIELD_NAMES))
                 self.total_rows += 1
 
+    def _prepare_output_schema(self) -> None:
+        if not self.output.exists() or self.output.stat().st_size == 0:
+            return
+        with self.output.open("r", encoding="utf-8-sig", newline="") as handle:
+            fieldnames = tuple(csv.DictReader(handle, delimiter="\t").fieldnames or ())
+        if fieldnames == FIELD_NAMES:
+            if not self.checkpoint.exists():
+                return
+            checkpoint_data = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+            if checkpoint_data.get("schema_version") == SCHEMA_VERSION:
+                return
+            self._backup_results(
+                "before_generation_type_rows",
+                "检测到旧版结果，已备份并将按 generation + type 逐行重抓",
+            )
+            return
+        if fieldnames == SALES_WITH_RANK_FIELD_NAMES:
+            self._backup_results(
+                "before_rank_removal",
+                "检测到含 Rank 的旧版销售结果，已备份并将按新表头重抓",
+            )
+            return
+        if fieldnames == SALES_WITHOUT_YEARS_FIELD_NAMES:
+            self._backup_results(
+                "before_years",
+                "检测到不含 Years 的旧版销售结果，已备份并将重新解析代际标题",
+            )
+            return
+        if fieldnames == IMAGE_TYPE_FIELD_NAMES:
+            self._backup_results(
+                "before_sales_only",
+                "检测到包含图片字段的旧版结果，已备份并将只抓取 generation + type + sale_detail",
+            )
+            return
+        if fieldnames == NO_BODY_TYPE_FIELD_NAMES:
+            self._backup_results(
+                "before_type_restore",
+                "检测到不含 type 的旧版结果，已备份并将按车型逐行重抓",
+            )
+            return
+        if fieldnames == BODY_TYPE_FIELD_NAMES:
+            self._backup_results(
+                "before_type_rename",
+                "检测到使用 body_type 字段的旧版结果，已备份并将改用 type 重抓",
+            )
+            return
+        if fieldnames != LEGACY_FIELD_NAMES:
+            raise RuntimeError(f"已有 TSV 表头不兼容：{self.output}")
+
+        self._backup_results(
+            "before_images",
+            "检测到不含图片列的旧版结果，已备份并将从头抓取",
+        )
+
+    def _backup_results(self, label: str, message: str) -> None:
+        output_backup = self._next_backup_path(self.output, label)
+        self.output.replace(output_backup)
+        checkpoint_backup: Path | None = None
+        if self.checkpoint.exists():
+            checkpoint_backup = self._next_backup_path(self.checkpoint, label)
+            self.checkpoint.replace(checkpoint_backup)
+        print(
+            f"{message}：\n"
+            f"  TSV 备份：{output_backup}"
+            + (
+                f"\n  checkpoint 备份：{checkpoint_backup}"
+                if checkpoint_backup is not None
+                else ""
+            ),
+            flush=True,
+        )
+
+    @staticmethod
+    def _next_backup_path(path: Path, label: str) -> Path:
+        candidate = path.with_name(f"{path.stem}.{label}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        return path.with_name(f"{path.stem}.{label}.{stamp}{path.suffix}")
+
     def _load_checkpoint(self) -> None:
         if not self.checkpoint.exists():
             return
         data = json.loads(self.checkpoint.read_text(encoding="utf-8"))
+        if data.get("schema_version") != SCHEMA_VERSION:
+            print("检测到旧版 checkpoint，将按 generation + type 从头处理。", flush=True)
+            return
         self.completed_urls = {
             canonical_url(str(url)) for url in data.get("completed_urls", [])
         }
@@ -327,6 +623,7 @@ class AutoRuModelSalesScraper:
         temporary.write_text(
             json.dumps(
                 {
+                    "schema_version": SCHEMA_VERSION,
                     "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "completed_urls": sorted(self.completed_urls),
                 },
@@ -338,13 +635,25 @@ class AutoRuModelSalesScraper:
         temporary.replace(self.checkpoint)
 
     def _log_error(self, url: str, exc: Exception) -> None:
-        self.error_log.parent.mkdir(parents=True, exist_ok=True)
+        self._log_event(
+            "error",
+            "model_failed",
+            url,
+            f"{type(exc).__name__}: {exc}",
+        )
+
+    def _log_event(
+        self, level: str, event: str, url: str, detail: object
+    ) -> None:
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
         entry = {
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "level": level,
+            "event": event,
             "url": url,
-            "error": f"{type(exc).__name__}: {exc}",
+            "detail": detail,
         }
-        with self.error_log.open("a", encoding="utf-8") as handle:
+        with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def _maybe_cooldown(self) -> None:
@@ -360,12 +669,19 @@ class AutoRuModelSalesScraper:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="从 Auto.ru 车型 URL 列表提取车型概览、代际、车身类型和在售数量"
+        description="从 Auto.ru 车型 URL 列表提取 generation、type 和 sale_detail"
     )
     parser.add_argument("--input", default=str(DEFAULT_INPUT), help="输入 TSV、CSV 或纯 URL 文件")
     parser.add_argument("--url-column", default="link_url", help="输入表中的 URL 列名")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="输出 TSV 路径")
     parser.add_argument("--checkpoint", help="checkpoint 路径，默认与输出 TSV 同目录")
+    parser.add_argument("--log", default=str(DEFAULT_LOG), help="JSONL 运行日志路径")
+    parser.add_argument(
+        "--max",
+        type=int,
+        default=0,
+        help="只读取 input 的前 N 行参与本轮处理；0 表示读取全部",
+    )
     parser.add_argument("--max-models", type=int, default=0, help="本次最多处理车型数；0 表示不限")
     parser.add_argument("--timeout", type=float, default=25, help="页面等待秒数")
     parser.add_argument("--delay", type=float, default=1.0, help="每页加载后的等待秒数")
@@ -381,8 +697,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--keep-open", action="store_true", help="运行后保留浏览器")
     args = parser.parse_args()
-    if args.max_models < 0 or args.delay < 0 or args.retries < 0:
-        parser.error("--max-models、--delay 和 --retries 不能小于 0")
+    if args.max < 0 or args.max_models < 0 or args.delay < 0 or args.retries < 0:
+        parser.error("--max、--max-models、--delay 和 --retries 不能小于 0")
     if args.timeout <= 0 or args.cooldown_every < 0 or args.cooldown_seconds < 0:
         parser.error("--timeout 必须大于 0；冷却参数不能小于 0")
     return args
@@ -408,6 +724,8 @@ def main() -> int:
         models = read_model_inputs(Path(args.input).resolve(), args.url_column)
         if not models:
             raise RuntimeError("输入文件中没有可用的车型 URL")
+        if args.max:
+            models = models[: args.max]
         driver = make_driver(args)
         AutoRuModelSalesScraper(driver, args, models).run()
         return 0
