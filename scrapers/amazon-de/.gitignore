@@ -1,5 +1,10 @@
 .amazon_selenium_profile/
-output/
 __pycache__/
 .venv/
 .env
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+log/*
+!log/.gitkeep

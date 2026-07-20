@@ -1,0 +1,33 @@
+common:
+  output: ../output
+  profile_dir: ../.auto_ru_selenium_profile
+  timeout: 25
+  delay: 1.0
+  retries: 2
+  headless: false
+  no_start_pause: false
+  keep_open: false
+
+catalog_rank:
+  url: https://auto.ru/catalog/cars/
+  log: ../log/auto_ru_catalog_rank.log
+  start_page: 1
+  max_pages: 1000
+
+model_sales:
+  input: ../output/auto_ru_catalog_rank.csv
+  sheetname: null
+  url_column: link_url
+  log: ../log/auto_ru_model_sales.log
+  max: 0
+  max_models: 0
+  cooldown_every: 25
+  cooldown_seconds: 30
+
+gallery_image:
+  input: ../output/auto_ru_catalog_rank.csv
+  sheetname: null
+  url_column: link_url
+  log: ../log/auto_ru_gallery_images.log
+  max: 0
+  max_models: 0

@@ -21,10 +21,23 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
 
+SCRAPERS_ROOT = Path(__file__).resolve().parents[1]
+if str(SCRAPERS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRAPERS_ROOT))
+
+from common.project_io import (  # noqa: E402
+    append_json_log,
+    apply_known_defaults,
+    load_yaml_config,
+    output_file,
+    read_table_records,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_INPUT = PROJECT_ROOT / "tsv" / "auto_ru_catalog_rank.tsv"
-DEFAULT_OUTPUT = PROJECT_ROOT / "tsv" / "auto_ru_model_sales.tsv"
+DEFAULT_INPUT = PROJECT_ROOT / "output" / "auto_ru_catalog_rank.csv"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
+DEFAULT_CONFIG = PROJECT_ROOT / "config" / "auto_ru.yaml"
 DEFAULT_LOG = PROJECT_ROOT / "log" / "auto_ru_model_sales.log"
 
 SECTION_XPATH = "/html/body/div[1]/div/div/div[5]/div/div[2]/div[1]/section"
@@ -172,38 +185,22 @@ class ModelInput:
     link_url: str
 
 
-def read_model_inputs(path: Path, url_column: str) -> list[ModelInput]:
-    """Read a TSV/CSV table or a plain text file containing one URL per line."""
-    if not path.exists():
-        raise FileNotFoundError(f"输入文件不存在：{path}")
-
-    lines = path.read_text(encoding="utf-8-sig").splitlines()
-    nonempty = [line for line in lines if clean_text(line)]
-    if not nonempty:
-        return []
-
-    delimiter = "\t" if "\t" in nonempty[0] else ","
-    header = next(csv.reader([nonempty[0]], delimiter=delimiter))
-    if url_column in header:
-        rows: Iterable[dict[str, str]] = csv.DictReader(nonempty, delimiter=delimiter)
-        result = []
-        for row in rows:
-            url = clean_text(row.get(url_column))
-            if url:
-                result.append(
-                    ModelInput(
-                        rank=clean_text(row.get("Rank") or row.get("rank")),
-                        model=clean_text(row.get("Model") or row.get("model")),
-                        link_url=canonical_url(url),
-                    )
+def read_model_inputs(
+    path: Path, url_column: str, sheetname: str | None = None
+) -> list[ModelInput]:
+    """Read model URLs from TSV, CSV, XLSX, or a directory containing one."""
+    _resolved, rows = read_table_records(path, sheetname)
+    result = []
+    for row in rows:
+        url = clean_text(row.get(url_column))
+        if url:
+            result.append(
+                ModelInput(
+                    rank=clean_text(row.get("Rank") or row.get("rank")),
+                    model=clean_text(row.get("Model") or row.get("model")),
+                    link_url=canonical_url(url),
                 )
-        return deduplicate_inputs(result)
-
-    result = [
-        ModelInput(rank="", model="", link_url=canonical_url(line))
-        for line in nonempty
-        if clean_text(line).startswith(("http://", "https://"))
-    ]
+            )
     return deduplicate_inputs(result)
 
 
@@ -225,7 +222,7 @@ class AutoRuModelSalesScraper:
         self.args = args
         self.models = models
         self.wait = WebDriverWait(driver, args.timeout)
-        self.output = Path(args.output).resolve()
+        self.output = output_file(args.output, "auto_ru_model_sales.csv")
         self.checkpoint = Path(
             args.checkpoint or self.output.with_suffix(".checkpoint.json")
         ).resolve()
@@ -497,9 +494,9 @@ class AutoRuModelSalesScraper:
         if not self.output.exists() or self.output.stat().st_size == 0:
             return
         with self.output.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle, delimiter="\t")
+            reader = csv.DictReader(handle)
             if tuple(reader.fieldnames or ()) != FIELD_NAMES:
-                raise RuntimeError(f"已有 TSV 表头不兼容：{self.output}")
+                raise RuntimeError(f"已有 CSV 表头不兼容：{self.output}")
             for row in reader:
                 self.seen_rows.add(tuple(row.get(name, "") for name in FIELD_NAMES))
                 self.total_rows += 1
@@ -508,7 +505,7 @@ class AutoRuModelSalesScraper:
         if not self.output.exists() or self.output.stat().st_size == 0:
             return
         with self.output.open("r", encoding="utf-8-sig", newline="") as handle:
-            fieldnames = tuple(csv.DictReader(handle, delimiter="\t").fieldnames or ())
+            fieldnames = tuple(csv.DictReader(handle).fieldnames or ())
         if fieldnames == FIELD_NAMES:
             if not self.checkpoint.exists():
                 return
@@ -551,7 +548,7 @@ class AutoRuModelSalesScraper:
             )
             return
         if fieldnames != LEGACY_FIELD_NAMES:
-            raise RuntimeError(f"已有 TSV 表头不兼容：{self.output}")
+            raise RuntimeError(f"已有 CSV 表头不兼容：{self.output}")
 
         self._backup_results(
             "before_images",
@@ -567,7 +564,7 @@ class AutoRuModelSalesScraper:
             self.checkpoint.replace(checkpoint_backup)
         print(
             f"{message}：\n"
-            f"  TSV 备份：{output_backup}"
+            f"  CSV 备份：{output_backup}"
             + (
                 f"\n  checkpoint 备份：{checkpoint_backup}"
                 if checkpoint_backup is not None
@@ -600,7 +597,7 @@ class AutoRuModelSalesScraper:
         new_file = not self.output.exists() or self.output.stat().st_size == 0
         self.tsv_handle = self.output.open("a", encoding="utf-8-sig", newline="")
         self.tsv_writer = csv.DictWriter(
-            self.tsv_handle, fieldnames=FIELD_NAMES, delimiter="\t", lineterminator="\n"
+            self.tsv_handle, fieldnames=FIELD_NAMES, lineterminator="\n"
         )
         if new_file:
             self.tsv_writer.writeheader()
@@ -668,13 +665,20 @@ class AutoRuModelSalesScraper:
 
 
 def parse_args() -> argparse.Namespace:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    pre_args, _unknown = pre_parser.parse_known_args()
+    defaults = load_yaml_config(pre_args.config, "model_sales")
+
     parser = argparse.ArgumentParser(
         description="从 Auto.ru 车型 URL 列表提取 generation、type 和 sale_detail"
     )
-    parser.add_argument("--input", default=str(DEFAULT_INPUT), help="输入 TSV、CSV 或纯 URL 文件")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="YAML 配置文件")
+    parser.add_argument("--input", default=str(DEFAULT_INPUT), help="输入 TSV/CSV/XLSX 文件或目录")
+    parser.add_argument("--sheetname", help="XLSX sheet 名；默认使用第一个 sheet")
     parser.add_argument("--url-column", default="link_url", help="输入表中的 URL 列名")
-    parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="输出 TSV 路径")
-    parser.add_argument("--checkpoint", help="checkpoint 路径，默认与输出 TSV 同目录")
+    parser.add_argument("--output", default=str(DEFAULT_OUTPUT_DIR), help="CSV 输出目录")
+    parser.add_argument("--checkpoint", help="checkpoint 路径，默认与输出 CSV 同目录")
     parser.add_argument("--log", default=str(DEFAULT_LOG), help="JSONL 运行日志路径")
     parser.add_argument(
         "--max",
@@ -696,6 +700,7 @@ def parse_args() -> argparse.Namespace:
         help="Chrome 用户数据目录",
     )
     parser.add_argument("--keep-open", action="store_true", help="运行后保留浏览器")
+    apply_known_defaults(parser, defaults)
     args = parser.parse_args()
     if args.max < 0 or args.max_models < 0 or args.delay < 0 or args.retries < 0:
         parser.error("--max、--max-models、--delay 和 --retries 不能小于 0")
@@ -721,7 +726,9 @@ def main() -> int:
     args = parse_args()
     driver: webdriver.Chrome | None = None
     try:
-        models = read_model_inputs(Path(args.input).resolve(), args.url_column)
+        models = read_model_inputs(
+            Path(args.input).resolve(), args.url_column, args.sheetname
+        )
         if not models:
             raise RuntimeError("输入文件中没有可用的车型 URL")
         if args.max:
@@ -730,9 +737,11 @@ def main() -> int:
         AutoRuModelSalesScraper(driver, args, models).run()
         return 0
     except KeyboardInterrupt:
-        print("\n已中断；已写入的 TSV 和 checkpoint 会保留。")
+        append_json_log(args.log, "warning", "run_interrupted", "keyboard interrupt")
+        print("\n已中断；已写入的 CSV 和 checkpoint 会保留。")
         return 130
     except Exception as exc:
+        append_json_log(args.log, "error", "run_failed", f"{type(exc).__name__}: {exc}")
         print(f"错误：{type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     finally:

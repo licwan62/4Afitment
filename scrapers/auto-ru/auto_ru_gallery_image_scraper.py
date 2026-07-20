@@ -19,6 +19,7 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
 
 from auto_ru_model_sales_scraper import (
+    DEFAULT_CONFIG,
     DEFAULT_INPUT,
     PROJECT_ROOT,
     ModelInput,
@@ -28,9 +29,10 @@ from auto_ru_model_sales_scraper import (
     make_driver,
     read_model_inputs,
 )
+from common.project_io import append_json_log, apply_known_defaults, load_yaml_config, output_file
 
 
-DEFAULT_OUTPUT = PROJECT_ROOT / "tsv" / "auto_ru_gallery_images.tsv"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
 DEFAULT_LOG = PROJECT_ROOT / "log" / "auto_ru_gallery_images.log"
 GENERATIONS_ROOT_XPATH = "//div[@data-seo='generation-list']"
 GALLERY_LINK_XPATH = (
@@ -74,7 +76,7 @@ class AutoRuGalleryImageScraper:
         self.args = args
         self.models = models
         self.wait = WebDriverWait(driver, args.timeout)
-        self.output = Path(args.output).resolve()
+        self.output = output_file(args.output, "auto_ru_gallery_images.csv")
         self.checkpoint = Path(
             args.checkpoint or self.output.with_suffix(".checkpoint.json")
         ).resolve()
@@ -385,9 +387,9 @@ class AutoRuGalleryImageScraper:
         if not self.output.exists() or self.output.stat().st_size == 0:
             return
         with self.output.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle, delimiter="\t")
+            reader = csv.DictReader(handle)
             if tuple(reader.fieldnames or ()) != FIELD_NAMES:
-                raise RuntimeError(f"已有 TSV 表头不兼容：{self.output}")
+                raise RuntimeError(f"已有 CSV 表头不兼容：{self.output}")
             for row in reader:
                 self.seen_rows.add(tuple(row.get(name, "") for name in FIELD_NAMES))
                 self.total_rows += 1
@@ -396,7 +398,7 @@ class AutoRuGalleryImageScraper:
         if not self.output.exists() or self.output.stat().st_size == 0:
             return
         with self.output.open("r", encoding="utf-8-sig", newline="") as handle:
-            fieldnames = tuple(csv.DictReader(handle, delimiter="\t").fieldnames or ())
+            fieldnames = tuple(csv.DictReader(handle).fieldnames or ())
         if fieldnames == FIELD_NAMES:
             if not self.checkpoint.exists():
                 return
@@ -408,7 +410,7 @@ class AutoRuGalleryImageScraper:
             LEGACY_FIELD_NAMES,
             LEGACY_WITH_RANK_FIELD_NAMES,
         }:
-            raise RuntimeError(f"已有 TSV 表头不兼容：{self.output}")
+            raise RuntimeError(f"已有 CSV 表头不兼容：{self.output}")
         stamp = time.strftime("%Y%m%d_%H%M%S")
         output_backup = self.output.with_name(
             f"{self.output.stem}.before_years.{stamp}{self.output.suffix}"
@@ -436,7 +438,7 @@ class AutoRuGalleryImageScraper:
         new_file = not self.output.exists() or self.output.stat().st_size == 0
         self.tsv_handle = self.output.open("a", encoding="utf-8-sig", newline="")
         self.tsv_writer = csv.DictWriter(
-            self.tsv_handle, fieldnames=FIELD_NAMES, delimiter="\t", lineterminator="\n"
+            self.tsv_handle, fieldnames=FIELD_NAMES, lineterminator="\n"
         )
         if new_file:
             self.tsv_writer.writeheader()
@@ -494,10 +496,17 @@ class AutoRuGalleryImageScraper:
 
 
 def parse_args() -> argparse.Namespace:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    pre_args, _unknown = pre_parser.parse_known_args()
+    defaults = load_yaml_config(pre_args.config, "gallery_image")
+
     parser = argparse.ArgumentParser(description="从 Auto.ru gallery 链接提取五类图片")
-    parser.add_argument("--input", default=str(DEFAULT_INPUT), help="输入 TSV、CSV 或纯 URL 文件")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="YAML 配置文件")
+    parser.add_argument("--input", default=str(DEFAULT_INPUT), help="输入 TSV/CSV/XLSX 文件或目录")
+    parser.add_argument("--sheetname", help="XLSX sheet 名；默认使用第一个 sheet")
     parser.add_argument("--url-column", default="link_url", help="输入表中的 URL 列名")
-    parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="输出 TSV 路径")
+    parser.add_argument("--output", default=str(DEFAULT_OUTPUT_DIR), help="CSV 输出目录")
     parser.add_argument("--checkpoint", help="checkpoint 路径")
     parser.add_argument("--log", default=str(DEFAULT_LOG), help="JSONL 运行日志路径")
     parser.add_argument("--max", type=int, default=0, help="只读取 input 前 N 行；0 表示全部")
@@ -512,6 +521,7 @@ def parse_args() -> argparse.Namespace:
         default=str(PROJECT_ROOT / ".auto_ru_selenium_profile"),
     )
     parser.add_argument("--keep-open", action="store_true")
+    apply_known_defaults(parser, defaults)
     args = parser.parse_args()
     if args.max < 0 or args.max_models < 0 or args.delay < 0 or args.retries < 0:
         parser.error("数量、延迟和重试参数不能小于 0")
@@ -524,7 +534,9 @@ def main() -> int:
     args = parse_args()
     driver: webdriver.Chrome | None = None
     try:
-        models = read_model_inputs(Path(args.input).resolve(), args.url_column)
+        models = read_model_inputs(
+            Path(args.input).resolve(), args.url_column, args.sheetname
+        )
         if not models:
             raise RuntimeError("输入文件中没有可用的车型 URL")
         if args.max:
@@ -533,9 +545,11 @@ def main() -> int:
         AutoRuGalleryImageScraper(driver, args, models).run()
         return 0
     except KeyboardInterrupt:
-        print("\n已中断；已写入的 TSV 和 checkpoint 会保留。")
+        append_json_log(args.log, "warning", "run_interrupted", "keyboard interrupt")
+        print("\n已中断；已写入的 CSV 和 checkpoint 会保留。")
         return 130
     except Exception as exc:
+        append_json_log(args.log, "error", "run_failed", f"{type(exc).__name__}: {exc}")
         print(f"错误：{type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     finally:

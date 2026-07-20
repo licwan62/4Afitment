@@ -1,8 +1,8 @@
 import { chromium } from "playwright";
 import { ensureDir, loadConfig } from "./config.js";
 
-export async function openBrowser() {
-  const config = loadConfig();
+export async function openBrowser(configPath = "") {
+  const config = loadConfig(configPath);
   ensureDir(config.authProfileDir);
 
   const context = await chromium.launchPersistentContext(config.authProfileDir, {

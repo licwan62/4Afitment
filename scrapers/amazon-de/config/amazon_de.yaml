@@ -1,0 +1,14 @@
+common:
+  input: ../input
+  output: ../output
+  log: ../log/amazon_de_fitment.log
+  profile_dir: ../.amazon_selenium_profile
+  timeout: 20
+  delay: 0.8
+  headless: false
+
+amazon_de:
+  sheetname: null
+  url_column: link_url
+  max: 0
+  url: https://www.amazon.de/Protection-Tarpaulin-Price-Performance-Protect-Polyester/dp/B07RLG4NZV/?th=1

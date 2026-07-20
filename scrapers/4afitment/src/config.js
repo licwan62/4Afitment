@@ -1,14 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import YAML from "yaml";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const projectRoot = path.resolve(__dirname, "..");
 
-export function loadConfig() {
-  const configPath = path.join(projectRoot, "config.json");
+export function loadConfig(requestedPath = "") {
+  const configPath = path.resolve(requestedPath || path.join(projectRoot, "config", "4afitment.yaml"));
   const raw = fs.readFileSync(configPath, "utf8");
-  const config = JSON.parse(raw);
+  const document = path.extname(configPath).toLowerCase() === ".json" ? JSON.parse(raw) : YAML.parse(raw);
+  const config = { ...(document.common || {}), ...(document.scrape || document) };
+  const configDir = path.dirname(configPath);
 
   for (const key of [
     "projectsDir",
@@ -20,9 +23,13 @@ export function loadConfig() {
     "tsvMarkdownFile",
     "tsvSummaryFile",
     "requestLogFile",
-    "authProfileDir"
+    "authProfileDir",
+    "input",
+    "output",
+    "log",
+    "checkpoint"
   ]) {
-    config[key] = path.resolve(projectRoot, config[key]);
+    if (config[key]) config[key] = path.resolve(configDir, config[key]);
   }
 
   return config;

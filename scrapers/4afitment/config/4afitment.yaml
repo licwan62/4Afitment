@@ -1,0 +1,42 @@
+common:
+  input: ../input
+  output: ../output
+  log: ../log/4afitment.log
+  authProfileDir: ../.auth/profile
+  outputDir: ../output
+  inputTsvFile: ../input
+  checkpointFile: ../output/checkpoint.json
+  markdownFile: ../output/fitment_data.md
+  tsvCheckpointFile: ../output/from_tsv_checkpoint.json
+  tsvMarkdownFile: ../output/from_tsv.csv
+  tsvSummaryFile: ../output/from_tsv_summary.csv
+  requestLogFile: ../log/4afitment.log
+  headless: false
+  slowMoMs: 80
+
+scrape:
+  startUrl: https://car.4afitment.com/search/vc
+  sheetname: null
+  max: 0
+  yearRange:
+    from: "1896"
+    to: "2027"
+  selectors:
+    yearFrom: []
+    yearTo: []
+    manufacturer: []
+    model: []
+    searchButton: []
+    copyButton: []
+  labels:
+    year: [year]
+    yearFrom: [from year, start year, year from]
+    yearTo: [to year, end year, year to]
+    manufacturer: [manufacturer, make, brand]
+    model: [model]
+    searchButton: [search]
+    copyButton: [copy vehicle data, copy fitment, copy]
+  timeouts:
+    pageLoadMs: 60000
+    dropdownMs: 15000
+    settleMs: 700

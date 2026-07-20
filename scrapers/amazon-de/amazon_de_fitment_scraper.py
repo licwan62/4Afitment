@@ -32,14 +32,30 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
 
+SCRAPERS_ROOT = Path(__file__).resolve().parents[1]
+if str(SCRAPERS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRAPERS_ROOT))
+
+from common.project_io import (  # noqa: E402
+    append_json_log,
+    apply_known_defaults,
+    load_yaml_config,
+    output_file,
+    read_table_records,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
+DEFAULT_CONFIG = PROJECT_ROOT / "config" / "amazon_de.yaml"
+DEFAULT_LOG = PROJECT_ROOT / "log" / "amazon_de_fitment.log"
 START_URL = (
     "https://www.amazon.de/Protection-Tarpaulin-Price-Performance-Protect-"
     "Polyester/dp/B07RLG4NZV/?th=1"
 )
 POPOVER_XPATH = '//*[@id="a-popover-2"]'
 FIELD_NAMES = ("vehicle_type", "make", "model", "variant", "engine_type")
+OUTPUT_FIELD_NAMES = ("source_url", *FIELD_NAMES)
 FIELD_HINTS = (
     ("select a vehicle type", "vehicle type", "fahrzeugtyp"),
     ("select make", "make", "marke", "hersteller"),
@@ -64,8 +80,10 @@ class AmazonFitmentScraper:
         self.driver = driver
         self.args = args
         self.wait = WebDriverWait(driver, args.timeout)
-        self.output = Path(args.output).resolve()
-        self.error_log = self.output.with_suffix(".errors.log")
+        self.output = output_file(args.output, "amazon_de_fitment.csv")
+        self.log_path = Path(args.log).resolve()
+        self.urls: list[str] = list(args.urls)
+        self.current_url = ""
         self.rows: list[dict[str, str]] = []
         self.seen: set[tuple[str, ...]] = set()
         self.csv_handle: Any = None
@@ -75,28 +93,36 @@ class AmazonFitmentScraper:
         self.branch_counts = [0] * len(FIELD_NAMES)
 
     def run(self) -> None:
+        self._prepare_output_schema()
         self._load_existing_rows()
         self._open_csv()
         try:
-            print("[1/4] 正在打开 Amazon 商品页……")
-            self.driver.get(self.args.url)
-            self._accept_cookie_banner()
-            self._pause_for_captcha_if_needed()
-            print("[2/4] 正在识别车型弹窗和五级控件……")
-            popover = self._open_or_wait_for_popover()
-
-            if self.args.inspect:
-                self.inspect(popover)
-                return
-
-            print("[3/4] 已找到车型弹窗，开始五级嵌套遍历……")
-            self._walk(level=0, path=[])
-            self._write_json()
+            self._log_event("info", "run_started", {"product_count": len(self.urls)})
+            for product_index, product_url in enumerate(self.urls, 1):
+                if self.stop_requested:
+                    break
+                self.current_url = product_url
+                self.level_announced = [False] * len(FIELD_NAMES)
+                print(f"[{product_index}/{len(self.urls)}] 正在打开 Amazon 商品页……")
+                self.driver.get(product_url)
+                self._accept_cookie_banner()
+                self._pause_for_captcha_if_needed()
+                popover = self._open_or_wait_for_popover()
+                if self.args.inspect:
+                    self.inspect(popover)
+                    return
+                self._walk(level=0, path=[])
+                self._log_event("info", "product_completed", {"url": product_url})
             counts = "，".join(
                 f"第{i + 1}级 {count}" for i, count in enumerate(self.branch_counts)
             )
-            print(f"[4/4] 完成：累计落盘 {len(self.rows)} 条（{counts}）")
+            print(f"完成：累计落盘 {len(self.rows)} 条（{counts}）")
             print(f"CSV：{self.output}")
+            self._log_event(
+                "info",
+                "run_completed",
+                {"product_count": len(self.urls), "total_rows": len(self.rows)},
+            )
         finally:
             if self.csv_handle:
                 self.csv_handle.close()
@@ -128,7 +154,6 @@ class AmazonFitmentScraper:
                 self._wait_until_level_ready(level + 1)
                 self._walk(level + 1, current_path)
             except KeyboardInterrupt:
-                self._write_json()
                 raise
             except Exception as exc:  # 单个车型分支失败时继续其余分支
                 self._log_error(level, path, choice, exc)
@@ -473,27 +498,27 @@ class AmazonFitmentScraper:
             return
         with self.output.open("r", encoding="utf-8-sig", newline="") as handle:
             for row in csv.DictReader(handle):
-                if not all(name in row for name in FIELD_NAMES):
+                if not all(name in row for name in OUTPUT_FIELD_NAMES):
                     raise RuntimeError(f"已有 CSV 表头不兼容：{self.output}")
-                normalized = {name: row[name] for name in FIELD_NAMES}
+                normalized = {name: row[name] for name in OUTPUT_FIELD_NAMES}
                 self.rows.append(normalized)
-                self.seen.add(tuple(normalized[name] for name in FIELD_NAMES))
+                self.seen.add(tuple(normalized[name] for name in OUTPUT_FIELD_NAMES))
         print(f"断点续跑：已读取 {len(self.rows)} 条历史记录")
 
     def _open_csv(self) -> None:
         self.output.parent.mkdir(parents=True, exist_ok=True)
         new_file = not self.output.exists() or self.output.stat().st_size == 0
         self.csv_handle = self.output.open("a", encoding="utf-8-sig", newline="")
-        self.csv_writer = csv.DictWriter(self.csv_handle, fieldnames=FIELD_NAMES)
+        self.csv_writer = csv.DictWriter(self.csv_handle, fieldnames=OUTPUT_FIELD_NAMES)
         if new_file:
             self.csv_writer.writeheader()
             self.csv_handle.flush()
 
     def _save_row(self, path: list[str]) -> None:
-        key = tuple(path)
+        key = (self.current_url, *path)
         if key in self.seen:
             return
-        row = dict(zip(FIELD_NAMES, path, strict=True))
+        row = {"source_url": self.current_url, **dict(zip(FIELD_NAMES, path, strict=True))}
         assert self.csv_writer is not None
         self.csv_writer.writerow(row)
         self.csv_handle.flush()
@@ -501,16 +526,18 @@ class AmazonFitmentScraper:
         self.seen.add(key)
         if len(self.rows) % 100 == 0:
             print(f"  进度：已累计落盘 {len(self.rows)} 条", flush=True)
-        if len(self.rows) % 50 == 0:
-            self._write_json()
-
-    def _write_json(self) -> None:
-        target = self.output.with_suffix(".json")
-        temporary = target.with_suffix(target.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps(self.rows, ensure_ascii=False, indent=2), encoding="utf-8"
+    def _prepare_output_schema(self) -> None:
+        if not self.output.exists() or self.output.stat().st_size == 0:
+            return
+        with self.output.open("r", encoding="utf-8-sig", newline="") as handle:
+            header = tuple(csv.DictReader(handle).fieldnames or ())
+        if header == OUTPUT_FIELD_NAMES:
+            return
+        backup = self.output.with_name(
+            f"{self.output.stem}.before_source_url.{time.strftime('%Y%m%d_%H%M%S')}.csv"
         )
-        temporary.replace(target)
+        self.output.replace(backup)
+        print(f"旧版输出已备份：{backup}")
 
     def _log_error(
         self, level: int, path: list[str], choice: Choice, exc: Exception
@@ -521,20 +548,46 @@ class AmazonFitmentScraper:
             "path": [*path, choice.text],
             "error": f"{type(exc).__name__}: {exc}",
         }
-        with self.error_log.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(message, ensure_ascii=False) + "\n")
+        self._log_event("error", "branch_failed", message)
+
+    def _log_event(self, level: str, event: str, detail: object) -> None:
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.log_path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "level": level,
+                        "event": event,
+                        "detail": detail,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
 
 
 def parse_args() -> argparse.Namespace:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    pre_args, _unknown = pre_parser.parse_known_args()
+    defaults = load_yaml_config(pre_args.config, "amazon_de")
+
     parser = argparse.ArgumentParser(
         description="遍历 Amazon.de 车型弹窗的五级联动下拉选项"
     )
-    parser.add_argument("--url", default=START_URL, help="Amazon 商品网址")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="YAML 配置文件")
+    parser.add_argument("--input", help="商品 URL 的 TSV/CSV/XLSX 文件或目录")
+    parser.add_argument("--sheetname", help="XLSX sheet 名；默认使用第一个 sheet")
+    parser.add_argument("--url-column", default="url", help="输入表中的商品 URL 列名")
+    parser.add_argument("--url", default=START_URL, help="没有 input 时使用的 Amazon 商品网址")
     parser.add_argument(
         "--output",
-        default=str(PROJECT_ROOT / "output" / "amazon_de_vehicles.csv"),
-        help="输出 CSV 路径",
+        default=str(DEFAULT_OUTPUT_DIR),
+        help="CSV 输出目录",
     )
+    parser.add_argument("--log", default=str(DEFAULT_LOG), help="JSONL 日志路径")
+    parser.add_argument("--max", type=int, default=0, help="只读取 input 前 N 行；0 表示全部")
     parser.add_argument("--timeout", type=float, default=20, help="控件等待秒数")
     parser.add_argument("--delay", type=float, default=0.55, help="每次选择后的等待秒数")
     parser.add_argument("--headless", action="store_true", help="无界面运行")
@@ -548,7 +601,30 @@ def parse_args() -> argparse.Namespace:
         help="Chrome 独立用户数据目录",
     )
     parser.add_argument("--keep-open", action="store_true", help="完成后不自动关闭浏览器")
-    return parser.parse_args()
+    apply_known_defaults(parser, defaults)
+    args = parser.parse_args()
+    if args.max < 0 or args.max_rows < 0:
+        parser.error("--max 和 --max-rows 不能小于 0")
+    return args
+
+
+def read_product_urls(args: argparse.Namespace) -> list[str]:
+    if not args.input:
+        return [args.url]
+    _path, rows = read_table_records(args.input, args.sheetname)
+    urls: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        value = str(
+            row.get(args.url_column)
+            or row.get("link_url")
+            or row.get("url")
+            or ""
+        ).strip()
+        if value.startswith(("http://", "https://")) and value not in seen:
+            seen.add(value)
+            urls.append(value)
+    return urls[: args.max] if args.max else urls
 
 
 def make_driver(args: argparse.Namespace) -> webdriver.Chrome:
@@ -564,14 +640,27 @@ def make_driver(args: argparse.Namespace) -> webdriver.Chrome:
 def main() -> int:
     args = parse_args()
     driver: webdriver.Chrome | None = None
+    scraper: AmazonFitmentScraper | None = None
     try:
+        args.urls = read_product_urls(args)
+        if not args.urls:
+            raise RuntimeError("input 中没有可用的商品 URL")
         driver = make_driver(args)
-        AmazonFitmentScraper(driver, args).run()
+        scraper = AmazonFitmentScraper(driver, args)
+        scraper.run()
         return 0
     except KeyboardInterrupt:
+        if scraper is not None:
+            scraper._log_event("warning", "run_interrupted", "keyboard interrupt")
+        else:
+            append_json_log(args.log, "warning", "run_interrupted", "keyboard interrupt")
         print("\n已中断；CSV 中已写入的记录会保留，下次可继续运行。")
         return 130
     except Exception as exc:
+        if scraper is not None:
+            scraper._log_event("error", "run_failed", f"{type(exc).__name__}: {exc}")
+        else:
+            append_json_log(args.log, "error", "run_failed", f"{type(exc).__name__}: {exc}")
         print(f"错误：{type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     finally:

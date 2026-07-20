@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import readXlsxFile from "read-excel-file/node";
 import { openBrowser } from "./browser.js";
+import { loadConfig, projectRoot } from "./config.js";
 import {
   chooseOptionIfNeeded,
   chooseOptionTextIfNeeded,
@@ -10,7 +12,7 @@ import {
   findYearRangeControls,
   getOptions
 } from "./dom.js";
-import { appendJsonLine, readJson, writeJson } from "./io.js";
+import { appendJsonLine, csvEscape, readJson, writeJson } from "./io.js";
 
 const cli = parseArgs(process.argv.slice(2));
 let restartCount = 0;
@@ -27,12 +29,18 @@ while (true) {
       console.log(`浏览器被关闭，自动重启继续，第 ${restartCount}/${maxRestarts} 次。`);
       continue;
     }
+    try {
+      const config = loadConfig(cli.config);
+      appendJsonLine(config.log || config.requestLogFile, { time: new Date().toISOString(), level: "error", event: "run_failed", detail: error.message });
+    } catch {
+      // Preserve the original error if configuration or log initialization also fails.
+    }
     throw error;
   }
 }
 
 async function runPass() {
-  const { config, context, page } = await openBrowser();
+  const { config, context, page } = await openBrowser(cli.config);
   applyCliOptions(config, cli);
 
   try {
@@ -41,8 +49,11 @@ async function runPass() {
       resetDone = true;
     }
 
-    const input = parseInputTsv(config.inputTsvFile, { optional: config.allMode });
-    const skip = readSkipFile(cli.skipMd || cli.skip || cli.excludeMd || cli.exclude || cli.skipTsv || cli.excludeTsv, config.projectOutputDir);
+    const input = await parseInputTable(config.inputTsvFile, { optional: config.allMode, sheetname: config.sheetname });
+    const maxInputRows = Number(cli.max ?? config.max ?? 0);
+    if (!Number.isInteger(maxInputRows) || maxInputRows < 0) throw new Error("--max 必须是大于等于 0 的整数");
+    if (maxInputRows) input.entries = input.entries.slice(0, maxInputRows);
+    const skip = await readSkipFile(cli.skipMd || cli.skip || cli.excludeMd || cli.exclude || cli.skipTsv || cli.excludeTsv, config.projectOutputDir);
     const checkpoint = readJson(config.tsvCheckpointFile, {
       completed: [],
       failed: [],
@@ -54,8 +65,8 @@ async function runPass() {
     const notFound = checkpoint.notFound ?? [];
     const modelsByManufacturer = checkpoint.modelsByManufacturer ?? {};
 
-    if (fs.existsSync(config.requestLogFile)) fs.rmSync(config.requestLogFile);
-    ensureMarkdownHeader(config, input);
+    appendJsonLine(config.requestLogFile, { time: new Date().toISOString(), event: "run_started", input: config.inputTsvFile, sheetname: config.sheetname || null, output: config.tsvMarkdownFile });
+    ensureCsvHeader(config);
     writeSummary(config, input, checkpoint);
 
     page.on("response", async (response) => {
@@ -97,8 +108,8 @@ async function runPass() {
     console.log(`manufacturer: ${manufacturerSelector}`);
     console.log(`model: ${modelSelector}`);
     console.log(`Project：${config.projectName}`);
-    console.log(`TSV 输入：${config.inputTsvFile}`);
-    console.log(`Markdown 输出：${config.tsvMarkdownFile}`);
+    console.log(`表格输入：${config.inputTsvFile}`);
+    console.log(`CSV 输出：${config.tsvMarkdownFile}`);
     if (skip.keys.size || skip.brands.size) {
       console.log(`Skip 组合数量：${skip.keys.size}`);
       console.log(`Skip 品牌数量：${skip.brands.size}`);
@@ -113,7 +124,7 @@ async function runPass() {
     if (input.allMode) {
       input.entries = siteManufacturers.map((manufacturer) => ({ make: manufacturer.text, model: "" }));
     }
-    console.log(`TSV 品牌数量：${input.entries.length}`);
+    console.log(`输入品牌数量：${input.entries.length}`);
 
     for (const entry of input.entries) {
       assertPageOpen(page);
@@ -125,6 +136,7 @@ async function runPass() {
           model: entry.model,
           reason: "品牌在 4AFitment 制造商下拉列表中找不到"
         });
+        appendJsonLine(config.requestLogFile, { time: new Date().toISOString(), event: "not_found", make: entry.make, model: entry.model, reason: "manufacturer_not_found" });
         saveCheckpoint(config, checkpoint, completed, failed, notFound);
         writeSummary(config, input, { ...checkpoint, notFound });
         console.log(`找不到品牌：${entry.make}`);
@@ -161,6 +173,7 @@ async function runPass() {
           model: entry.model,
           reason: "车型在该品牌车型下拉列表中找不到"
         });
+        appendJsonLine(config.requestLogFile, { time: new Date().toISOString(), event: "not_found", make: entry.make, model: entry.model, reason: "model_not_found" });
         saveCheckpoint(config, checkpoint, completed, failed, notFound);
         writeSummary(config, input, { ...checkpoint, notFound });
         console.log(`找不到车型：${entry.make} / ${entry.model}`);
@@ -192,7 +205,7 @@ async function runPass() {
           await page.waitForTimeout(300);
 
           const copied = await readClipboardText(page);
-          appendMarkdownSection(config, {
+          appendCsvRow(config, {
             manufacturer: manufacturer.text,
             model: model.text,
             content: copied
@@ -211,6 +224,7 @@ async function runPass() {
           if (isBrowserClosedError(error)) throw error;
 
           failed.add(key);
+          appendJsonLine(config.requestLogFile, { time: new Date().toISOString(), event: "row_failed", make: manufacturer.text, model: model.text, reason: error.message });
           saveCheckpoint(config, checkpoint, completed, failed, notFound, {
             currentManufacturer: manufacturer.text,
             currentModel: model.text,
@@ -224,6 +238,7 @@ async function runPass() {
 
     saveCheckpoint(config, checkpoint, completed, failed, notFound, { completedAt: new Date().toISOString() });
     writeSummary(config, input, { ...checkpoint, notFound, completed: [...completed], failed: [...failed] });
+    appendJsonLine(config.requestLogFile, { time: new Date().toISOString(), event: "run_completed", completed: completed.size, failed: failed.size, not_found: notFound.length });
     console.log(`完成：${completed.size} 个组合，输出 ${config.tsvMarkdownFile}`);
     console.log(`Summary：${config.tsvSummaryFile}`);
   } finally {
@@ -232,39 +247,29 @@ async function runPass() {
 }
 
 function applyCliOptions(config, args) {
-  const requestedInput = args.file || args.input || "";
-  const projectsDir = path.resolve(process.cwd(), args.projectsDir || args.projects || config.projectsDir || "projects");
-  const projectRef = resolveProjectRef(args.project, projectsDir);
-  const projectName = projectRef.name || sanitizeFileStem(inferProjectName(requestedInput || discoverDefaultInput(config.inputTsvFile)));
-  const projectDir = path.resolve(process.cwd(), args.projectDir || projectRef.dir || path.join(projectsDir, projectName));
-  const projectInputDir = path.join(projectDir, "input");
-  const projectOutputDir = path.join(projectDir, "output");
+  const requestedInput = args.file || args.input || config.input || config.inputTsvFile || "";
+  const projectName = sanitizeFileStem(args.name || config.name || "4afitment");
+  const projectDir = path.resolve(config.projectDir || projectRoot);
+  const projectInputDir = path.resolve(config.input || path.join(projectDir, "..", "input"));
+  const projectOutputDir = path.resolve(args.output || args.out || config.output || path.join(projectDir, "..", "output"));
   const outputName = sanitizeFileStem(args.name || args.prefix || "from_tsv");
-
-  const defaultProjectInput = path.join(projectInputDir, path.basename(config.inputTsvFile));
-  const discoveredInput = requestedInput
-    ? resolveProjectPath(requestedInput, projectInputDir)
-    : discoverDefaultInput(config.inputTsvFile, projectInputDir, { allowRootFallback: !args.project });
+  const discoveredInput = discoverInputFile(requestedInput, projectInputDir);
 
   config.projectName = projectName;
   config.projectsDir = projectsDir;
   config.projectDir = projectDir;
   config.projectInputDir = projectInputDir;
   config.projectOutputDir = projectOutputDir;
-  config.inputTsvFile = requestedInput ? discoveredInput : (fs.existsSync(defaultProjectInput) ? defaultProjectInput : discoveredInput);
-  config.allMode = !requestedInput && !fs.existsSync(config.inputTsvFile);
-  config.tsvMarkdownFile = args.output || args.out
-    ? resolveProjectPath(args.output || args.out, projectOutputDir)
-    : path.join(projectOutputDir, `${outputName}.md`);
-  config.tsvSummaryFile = args.summary
-    ? resolveProjectPath(args.summary, projectOutputDir)
-    : path.join(projectOutputDir, `${outputName}_summary.md`);
+  config.inputTsvFile = discoveredInput;
+  config.sheetname = args.sheetname || config.sheetname || undefined;
+  config.max = args.max ?? config.max ?? 0;
+  config.allMode = !requestedInput && !config.input && !fs.existsSync(config.inputTsvFile);
+  config.tsvMarkdownFile = path.join(projectOutputDir, `${outputName}.csv`);
+  config.tsvSummaryFile = path.join(projectOutputDir, `${outputName}_summary.csv`);
   config.tsvCheckpointFile = args.checkpoint
     ? resolveProjectPath(args.checkpoint, projectOutputDir)
     : path.join(projectOutputDir, `${outputName}_checkpoint.json`);
-  config.requestLogFile = args.networkLog
-    ? resolveProjectPath(args.networkLog, projectOutputDir)
-    : path.join(projectOutputDir, "network.jsonl");
+  config.requestLogFile = path.resolve(args.log || config.log || path.join(projectDir, "..", "log", "4afitment.log"));
 }
 
 function resolveProjectRef(project, projectsDir) {
@@ -287,7 +292,7 @@ function resetOutputFiles(config) {
   }
 }
 
-function parseInputTsv(file, options = {}) {
+async function parseInputTable(file, options = {}) {
   if (!fs.existsSync(file)) {
     if (options.optional) {
       return {
@@ -297,27 +302,39 @@ function parseInputTsv(file, options = {}) {
         entries: []
       };
     }
-    throw new Error(`找不到 TSV 文件：${file}`);
+    throw new Error(`找不到输入表格：${file}`);
   }
 
-  const raw = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
-  const lines = raw.split(/\r?\n/).filter((line) => line.trim());
-  if (!lines.length) throw new Error(`TSV 文件为空：${file}`);
+  const extension = path.extname(file).toLowerCase();
+  let rows;
+  if (extension === ".xlsx") {
+    try {
+      rows = await readXlsxFile(file, { sheet: options.sheetname || 1 });
+    } catch (error) {
+      throw new Error(`读取 Excel 失败${options.sheetname ? `（sheet: ${options.sheetname}）` : ""}：${error.message}`);
+    }
+  } else {
+    const delimiter = extension === ".csv" ? "," : "\t";
+    const raw = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+    rows = raw.split(/\r?\n/).filter((line) => line.trim()).map((line) => delimiter === "\t" ? splitTsvLine(line) : parseCsvLine(line));
+  }
+  const lines = rows.filter((row) => row.some((cell) => String(cell).trim()));
+  if (!lines.length) throw new Error(`输入表格为空：${file}`);
 
-  const first = splitTsvLine(lines[0]);
+  const first = lines[0].map((cell) => String(cell).trim());
   const normalizedHeader = first.map(normalizeHeader);
   const hasHeader = normalizedHeader.some((name) => ["make", "model"].includes(name));
 
   const makeIndex = hasHeader ? normalizedHeader.findIndex((name) => name === "make") : 0;
   const modelIndex = hasHeader ? normalizedHeader.findIndex((name) => name === "model") : 1;
-  if (makeIndex < 0) throw new Error("TSV 需要包含品牌列：make / brand / manufacturer / 品牌");
+  if (makeIndex < 0) throw new Error("输入表格需要包含品牌列：make / brand / manufacturer / 品牌");
 
   const dataLines = hasHeader ? lines.slice(1) : lines;
   const entries = [];
   const seen = new Set();
 
   for (const line of dataLines) {
-    const cells = splitTsvLine(line);
+    const cells = line.map((cell) => String(cell).trim());
     const make = (cells[makeIndex] ?? "").trim();
     const model = modelIndex >= 0 ? (cells[modelIndex] ?? "").trim() : "";
     if (!make) continue;
@@ -336,7 +353,7 @@ function parseInputTsv(file, options = {}) {
   };
 }
 
-function readSkipFile(file, projectOutputDir = process.cwd()) {
+async function readSkipFile(file, projectOutputDir = process.cwd()) {
   const empty = { keys: new Set(), brands: new Set() };
   if (!file) return empty;
 
@@ -369,8 +386,8 @@ function readSkipFile(file, projectOutputDir = process.cwd()) {
   return { keys, brands: new Set() };
 }
 
-function readSkipTsv(file) {
-  const input = parseInputTsv(file);
+async function readSkipTsv(file) {
+  const input = await parseInputTable(file);
   const keys = new Set();
   const brands = new Set();
 
@@ -432,40 +449,15 @@ function saveCheckpoint(config, checkpoint, completed, failed, notFound, extra =
   });
 }
 
-function ensureMarkdownHeader(config, input) {
+function ensureCsvHeader(config) {
   fs.mkdirSync(path.dirname(config.tsvMarkdownFile), { recursive: true });
   if (fs.existsSync(config.tsvMarkdownFile)) return;
-
-  fs.writeFileSync(
-    config.tsvMarkdownFile,
-    [
-      "# 4AFitment TSV Copied Vehicle Data",
-      "",
-      `Input: ${input.file}`,
-      `Year range: ${config.yearRange.from} - ${config.yearRange.to}`,
-      `Generated at: ${new Date().toISOString()}`,
-      ""
-    ].join("\n"),
-    "utf8"
-  );
+  fs.writeFileSync(config.tsvMarkdownFile, "make,model,year_from,year_to,content,copied_at\n", "utf8");
 }
 
-function appendMarkdownSection(config, { manufacturer, model, content }) {
-  const safeContent = String(content || "").replaceAll("```", "`\\`\\`");
-  const block = [
-    "",
-    `## ${manufacturer} / ${model}`,
-    "",
-    `- Year range: ${config.yearRange.from} - ${config.yearRange.to}`,
-    `- Copied at: ${new Date().toISOString()}`,
-    "",
-    "```text",
-    safeContent.trim(),
-    "```",
-    ""
-  ].join("\n");
-
-  fs.appendFileSync(config.tsvMarkdownFile, block, "utf8");
+function appendCsvRow(config, { manufacturer, model, content }) {
+  const values = [manufacturer, model, config.yearRange.from, config.yearRange.to, String(content || "").trim(), new Date().toISOString()];
+  fs.appendFileSync(config.tsvMarkdownFile, `${values.map(csvEscape).join(",")}\n`, "utf8");
 }
 
 function writeSummary(config, input, checkpoint) {
@@ -474,32 +466,16 @@ function writeSummary(config, input, checkpoint) {
   const failed = checkpoint.failed ?? [];
   const completed = checkpoint.completed ?? [];
 
-  const lines = [
-    "# 4AFitment TSV Summary",
-    "",
-    `Input: ${input.file}`,
-    `Input rows: ${input.entries.length}`,
-    `Completed combinations: ${completed.length}`,
-    `Failed combinations: ${failed.length}`,
-    `Not found rows: ${notFound.length}`,
-    `Updated at: ${new Date().toISOString()}`,
-    ""
-  ];
-
-  if (notFound.length) {
-    lines.push("## Not Found", "");
-    for (const item of notFound) {
-      lines.push(`- ${item.make}${item.model ? ` / ${item.model}` : ""}: ${item.reason}`);
-    }
-    lines.push("");
+  const lines = ["status,make,model,reason"];
+  for (const key of completed) {
+    const [make, model] = String(key).split("\t", 2);
+    lines.push(["completed", make, model, ""].map(csvEscape).join(","));
   }
-
-  if (failed.length) {
-    lines.push("## Failed", "");
-    for (const item of failed) lines.push(`- ${item}`);
-    lines.push("");
+  for (const key of failed) {
+    const [make, model] = String(key).split("\t", 2);
+    lines.push(["failed", make, model, ""].map(csvEscape).join(","));
   }
-
+  for (const item of notFound) lines.push(["not_found", item.make, item.model || "", item.reason].map(csvEscape).join(","));
   fs.writeFileSync(config.tsvSummaryFile, `${lines.join("\n")}\n`, "utf8");
 }
 
@@ -580,7 +556,7 @@ function findFirstTsv(dir) {
 
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
-    if (entry.isFile() && entry.name.toLowerCase().endsWith(".tsv")) return fullPath;
+    if (entry.isFile() && /\.(tsv|csv|xlsx)$/i.test(entry.name)) return fullPath;
   }
 
   for (const entry of entries) {
@@ -592,6 +568,30 @@ function findFirstTsv(dir) {
   }
 
   return "";
+}
+
+function discoverInputFile(value, defaultDir) {
+  const resolved = path.resolve(value || defaultDir);
+  if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+    return findFirstTsv(resolved) || path.join(resolved, "input.tsv");
+  }
+  return resolved;
+}
+
+function parseCsvLine(line) {
+  const cells = [];
+  let value = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (quoted && line[index + 1] === '"') { value += '"'; index += 1; }
+      else quoted = !quoted;
+    } else if (char === "," && !quoted) { cells.push(value.trim()); value = ""; }
+    else value += char;
+  }
+  cells.push(value.trim());
+  return cells;
 }
 
 function parseArgs(argv) {

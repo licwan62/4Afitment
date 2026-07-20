@@ -19,9 +19,18 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
 
+SCRAPERS_ROOT = Path(__file__).resolve().parents[1]
+if str(SCRAPERS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRAPERS_ROOT))
+
+from common.project_io import apply_known_defaults, load_yaml_config, output_file  # noqa: E402
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 START_URL = "https://auto.ru/catalog/cars/"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
+DEFAULT_CONFIG = PROJECT_ROOT / "config" / "auto_ru.yaml"
+DEFAULT_LOG = PROJECT_ROOT / "log" / "auto_ru_catalog_rank.log"
 CARD_ROOT_XPATH = "/html/body/div[1]/div/div/div[5]/div[2]/div[2]/div[2]/div[2]/div[2]"
 FIELD_NAMES = ("Rank", "Model", "Sale", "Price", "link_url", "page_url", "image_url")
 CSS_URL_RE = re.compile(r"url\([\"']?(.*?)[\"']?\)", re.IGNORECASE)
@@ -38,19 +47,39 @@ def page_url(base_url: str, page: int) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
+def append_log(path: str | Path, level: str, event: str, detail: object) -> None:
+    target = Path(path).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "level": level,
+                    "event": event,
+                    "detail": detail,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+
 class CatalogRankScraper:
     def __init__(self, driver: webdriver.Chrome, args: argparse.Namespace) -> None:
         self.driver = driver
         self.args = args
         self.wait = WebDriverWait(driver, args.timeout)
+        self.log_path = Path(args.log).resolve()
 
     def run(self) -> None:
-        output = Path(self.args.output).resolve()
+        output = output_file(self.args.output, "auto_ru_catalog_rank.csv")
         checkpoint = Path(
             self.args.checkpoint or output.with_suffix(".checkpoint.json")
         ).resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        append_log(self.log_path, "info", "run_started", {"output": str(output)})
         if self.args.restart:
             self._backup_for_restart(output)
             self._backup_for_restart(checkpoint)
@@ -58,6 +87,12 @@ class CatalogRankScraper:
         state = self._load_state(output, checkpoint)
         if state["completed"] and state.get("total_pages"):
             print(f"checkpoint 显示任务已完成：{output}（{state['rank']} 条）")
+            append_log(
+                self.log_path,
+                "info",
+                "run_completed",
+                {"output": str(output), "rows": state["rank"], "resumed": True},
+            )
             return
         if state["completed"]:
             state["completed"] = False
@@ -75,7 +110,7 @@ class CatalogRankScraper:
         new_file = not output.exists()
 
         with output.open("a", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=FIELD_NAMES, delimiter="\t")
+            writer = csv.DictWriter(handle, fieldnames=FIELD_NAMES)
             if new_file:
                 writer.writeheader()
                 handle.flush()
@@ -176,6 +211,12 @@ class CatalogRankScraper:
                 print(f"已达到 --max-pages={self.args.max_pages}。")
 
         print(f"完成：{output}（{rank} 条）")
+        append_log(
+            self.log_path,
+            "info",
+            "run_completed",
+            {"output": str(output), "rows": rank, "skipped_pages": skipped_pages},
+        )
 
     @staticmethod
     def _backup_for_restart(path: Path) -> None:
@@ -217,23 +258,23 @@ class CatalogRankScraper:
         if state.get("url") != self.args.url or state.get("fields") != list(FIELD_NAMES):
             raise RuntimeError("checkpoint 与当前 URL 或字段结构不匹配；请检查参数或使用 --restart")
         if not output.exists():
-            raise RuntimeError("checkpoint 存在但 TSV 不存在；请使用 --restart 从头开始")
+            raise RuntimeError("checkpoint 存在但 CSV 不存在；请使用 --restart 从头开始")
         with output.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.reader(handle, delimiter="\t")
+            reader = csv.reader(handle)
             header = next(reader, [])
             rows = list(reader)
         if tuple(header) != FIELD_NAMES:
-            raise RuntimeError("TSV 表头与当前字段结构不匹配；请使用 --restart 从头开始")
+            raise RuntimeError("CSV 表头与当前字段结构不匹配；请使用 --restart 从头开始")
         committed_rank = int(state["rank"])
         if len(rows) < committed_rank:
-            raise RuntimeError("TSV 行数少于 checkpoint 记录，无法安全恢复；请检查文件")
+            raise RuntimeError("CSV 行数少于 checkpoint 记录，无法安全恢复；请检查文件")
         if len(rows) > committed_rank:
-            # TSV 刷盘成功但 checkpoint 尚未替换时可能发生；丢弃未提交的尾部整页。
+            # CSV 刷盘成功但 checkpoint 尚未替换时可能发生；丢弃未提交的尾部整页。
             with output.open("w", encoding="utf-8-sig", newline="") as handle:
-                writer = csv.writer(handle, delimiter="\t")
+                writer = csv.writer(handle)
                 writer.writerow(FIELD_NAMES)
                 writer.writerows(rows[:committed_rank])
-            print(f"已丢弃 {len(rows) - committed_rank} 条未提交的 TSV 尾部记录。")
+            print(f"已丢弃 {len(rows) - committed_rank} 条未提交的 CSV 尾部记录。")
         print(
             f"从 checkpoint 恢复：第 {state['next_page']} 页，下一条 Rank={int(state['rank']) + 1}",
             flush=True,
@@ -422,14 +463,23 @@ class CatalogRankScraper:
 
 
 def parse_args() -> argparse.Namespace:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    pre_args, _unknown = pre_parser.parse_known_args()
+    defaults = load_yaml_config(pre_args.config, "catalog_rank")
+
     parser = argparse.ArgumentParser(description="按分页顺序抓取 Auto.ru 目录卡片排行")
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="YAML 配置文件")
+    parser.add_argument("--input", help="保留的统一输入参数；catalog_rank 不需要列表输入")
+    parser.add_argument("--sheetname", help="保留的统一 XLSX sheet 参数")
     parser.add_argument("--url", default=START_URL, help="目录起始网址")
     parser.add_argument(
         "--output",
-        default=str(PROJECT_ROOT / "tsv" / "auto_ru_catalog_rank.tsv"),
-        help="输出 TSV 路径",
+        default=str(DEFAULT_OUTPUT_DIR),
+        help="CSV 输出目录",
     )
-    parser.add_argument("--checkpoint", help="checkpoint 路径，默认与 TSV 同目录")
+    parser.add_argument("--checkpoint", help="checkpoint 路径，默认与 CSV 同目录")
+    parser.add_argument("--log", default=str(DEFAULT_LOG), help="JSONL 日志路径")
     parser.add_argument(
         "--restart", action="store_true", help="备份既有输出和 checkpoint 后从头重抓"
     )
@@ -449,6 +499,7 @@ def parse_args() -> argparse.Namespace:
         help="Chrome 用户数据目录",
     )
     parser.add_argument("--keep-open", action="store_true", help="运行后保留浏览器")
+    apply_known_defaults(parser, defaults)
     args = parser.parse_args()
     if args.start_page < 1 or args.max_pages < 1:
         parser.error("--start-page 和 --max-pages 必须大于 0")
@@ -480,9 +531,11 @@ def main() -> int:
         CatalogRankScraper(driver, args).run()
         return 0
     except KeyboardInterrupt:
-        print("\n已中断；已完成页面的数据保留在 TSV 中。")
+        append_log(args.log, "warning", "interrupted", "用户中断")
+        print("\n已中断；已完成页面的数据保留在 CSV 中。")
         return 130
     except Exception as exc:
+        append_log(args.log, "error", "run_failed", f"{type(exc).__name__}: {exc}")
         print(f"错误：{type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     finally:
