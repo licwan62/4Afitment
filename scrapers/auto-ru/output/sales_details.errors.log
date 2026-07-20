@@ -1,0 +1,2 @@
+{"time": "2026-07-17 10:25:29", "url": "https://auto.ru/catalog/cars/tenet/t7/", "error": "RuntimeError: 指定的代际容器中未找到 body_type 和 sale_detail"}
+{"time": "2026-07-17 10:25:40", "url": "https://auto.ru/catalog/cars/haval/jolion/", "error": "RuntimeError: 指定的代际容器中未找到 body_type 和 sale_detail"}
