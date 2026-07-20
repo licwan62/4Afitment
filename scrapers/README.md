@@ -12,6 +12,11 @@ For Excel input, omit `sheetname` to read the first worksheet, or set it in YAML
 ## Commands
 
 ```powershell
+# One-time Python environment setup (run from the repository root)
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r scrapers/amazon-de/requirements.txt
+
 # 4AFitment
 cd scrapers/4afitment
 npm install
@@ -27,5 +32,7 @@ python scrapers/auto-ru/auto_ru_catalog_rank_scraper.py --config scrapers/auto-r
 python scrapers/auto-ru/auto_ru_model_sales_scraper.py --config scrapers/auto-ru/config/auto_ru.yaml
 python scrapers/auto-ru/auto_ru_gallery_image_scraper.py --config scrapers/auto-ru/config/auto_ru.yaml
 ```
+
+On later PowerShell sessions, activate `.venv` from the repository root before running a Python scraper.
 
 Command-line arguments override YAML values. The `max` setting limits the number of input rows for Amazon.de and the two Auto.ru list-input jobs.

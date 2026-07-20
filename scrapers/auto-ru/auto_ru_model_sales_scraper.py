@@ -44,13 +44,22 @@ SECTION_XPATH = "/html/body/div[1]/div/div/div[5]/div/div[2]/div[1]/section"
 GENERATIONS_ROOT_XPATH = (
     "//div[@data-seo='generation-list']"
 )
+GENERATION_ITEMS_XPATH = (
+    ".//div[contains(@class, 'CatalogGenerationsList__listItem-')]"
+)
 CONFIGURATIONS_LIST_XPATH = (
     ".//div[contains(@class, 'CatalogGenerationsListItem__configurationsList-')]"
+)
+TYPE_BADGE_XPATH = (
+    ".//div[contains(@class, 'CatalogGenerationsListItem__badges-')]"
+    "//*[contains(@class, 'Badge2-') "
+    "and contains(@class, 'Badge2_type_primary-') "
+    "and contains(@class, 'Badge2_color_transparent-')]"
 )
 GENERATION_TITLE_XPATH = (
     ".//*[contains(@class, 'CatalogGenerationsListItem__title-')]"
 )
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 13
 
 FIELD_NAMES = (
     "Model",
@@ -127,6 +136,12 @@ LEGACY_FIELD_NAMES = (
 
 def clean_text(value: object) -> str:
     return " ".join(str(value or "").replace("\xa0", " ").split())
+
+
+def numeric_sale_detail(value: object) -> str:
+    """Return a traceable numeric sale count; missing/non-numeric means zero."""
+    digits = re.sub(r"\D", "", clean_text(value))
+    return digits or "0"
 
 
 def canonical_url(url: str) -> str:
@@ -271,7 +286,7 @@ class AutoRuModelSalesScraper:
                             "warning",
                             "no_sales_rows",
                             model.link_url,
-                            "车型页没有可输出的 generation + type 数据；按正常完成处理",
+                            "车型页没有可输出的 generation/Years 数据；按正常完成处理",
                         )
                     saved = sum(self._save_row(row) for row in rows)
                     self.completed_urls.add(model.link_url)
@@ -374,7 +389,16 @@ class AutoRuModelSalesScraper:
 
         result: list[dict[str, str]] = []
         seen_generation_body_types: set[tuple[str, str, str]] = set()
-        generation_nodes = roots[0].find_elements(By.XPATH, "./div")
+        generation_nodes = roots[0].find_elements(
+            By.XPATH, GENERATION_ITEMS_XPATH
+        )
+        if not generation_nodes:
+            self._log_event(
+                "warning",
+                "generation_items_missing",
+                model.link_url,
+                f"未找到 {GENERATION_ITEMS_XPATH}",
+            )
         for generation_node in generation_nodes:
             generation, years = generation_and_years(generation_node)
             if not generation and not years:
@@ -384,6 +408,7 @@ class AutoRuModelSalesScraper:
                     model.link_url,
                     f"未找到 {GENERATION_TITLE_XPATH} 或其中 span 没有可解析文本",
                 )
+                continue
             elif not years:
                 title_nodes = generation_node.find_elements(
                     By.XPATH, GENERATION_TITLE_XPATH
@@ -402,19 +427,24 @@ class AutoRuModelSalesScraper:
                     model.link_url,
                     {"generation": generation, "raw_title": raw_title},
                 )
-            if not generation_node.find_elements(
-                By.XPATH, CONFIGURATIONS_LIST_XPATH
-            ):
+            details = self._configuration_details(generation_node)
+            if not details:
+                badge_types = self._generation_types_from_badges(generation_node)
+                if not badge_types:
+                    badge_types = [""]
                 self._log_event(
                     "warning",
-                    "configurations_list_missing",
+                    "configuration_links_missing",
                     model.link_url,
-                    {"generation": generation, "Years": years},
+                    {
+                        "generation": generation,
+                        "Years": years,
+                        "badge_types": badge_types,
+                        "sale_detail": "0",
+                    },
                 )
-                continue
-            for body_type, sale_detail in self._configuration_details(
-                generation_node
-            ):
+                details = [(badge_type, "0") for badge_type in badge_types]
+            for body_type, sale_detail in details:
                 unique_key = (
                     generation.casefold(),
                     years,
@@ -449,27 +479,29 @@ class AutoRuModelSalesScraper:
             containers[0].find_elements(By.XPATH, "./div"), 1
         ):
             links = child.find_elements(By.XPATH, ".//a")
-            details = child.find_elements(By.XPATH, ".//span")
+            name = clean_text(links[0].text) if links else ""
+            count = self._sale_detail_from(child)
             if not links:
                 self._log_event(
                     "warning",
                     "type_link_missing",
                     self.driver.current_url,
-                    {"configuration_index": child_index},
+                    {
+                        "configuration_index": child_index,
+                        "sale_detail": count,
+                    },
                 )
-                continue
-            name = clean_text(links[0].text)
-            count_text = clean_text(details[0].text) if details else ""
-            count = re.sub(r"\D", "", count_text)
             if not name:
                 self._log_event(
                     "warning",
                     "type_name_missing",
                     self.driver.current_url,
-                    {"configuration_index": child_index},
+                    {
+                        "configuration_index": child_index,
+                        "sale_detail": count,
+                    },
                 )
-                continue
-            if not details or not count:
+            if count == "0":
                 self._log_event(
                     "warning",
                     "sale_detail_missing",
@@ -477,11 +509,37 @@ class AutoRuModelSalesScraper:
                     {
                         "configuration_index": child_index,
                         "type": name,
-                        "raw_text": count_text,
+                        "fallback": "0",
                     },
                 )
             entries.append((name, count))
         return entries
+
+    @staticmethod
+    def _sale_detail_from(root: WebElement) -> str:
+        """Read a configuration's legacy sales span, retaining zero if absent."""
+        spans = root.find_elements(By.XPATH, ".//span")
+        if spans:
+            span = spans[0]
+            return numeric_sale_detail(
+                span.get_attribute("textContent") or span.text
+            )
+        return "0"
+
+    @staticmethod
+    def _generation_types_from_badges(
+        generation_node: WebElement,
+    ) -> list[str]:
+        """Read body types used when a generation has no configuration links."""
+        result: list[str] = []
+        seen: set[str] = set()
+        for badge in generation_node.find_elements(By.XPATH, TYPE_BADGE_XPATH):
+            name = clean_text(badge.get_attribute("textContent") or badge.text)
+            key = name.casefold()
+            if name and key not in seen:
+                result.append(name)
+                seen.add(key)
+        return result
 
     @staticmethod
     def _model_name(section_nodes: list[WebElement]) -> str:

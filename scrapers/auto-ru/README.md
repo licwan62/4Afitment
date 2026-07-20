@@ -15,10 +15,15 @@
 ## 安装与检查
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r .\scrapers\auto-ru\requirements.txt
 cd .\scrapers\auto-ru
-python -m pip install -r requirements.txt
 python .\auto_ru_dimensions_scraper.py --inspect-url https://auto.ru/catalog/cars/
 ```
+
+以上虚拟环境创建和依赖安装只需执行一次。以后重新打开 PowerShell 时，先在仓库根目录
+运行 `.\.venv\Scripts\Activate.ps1` 即可。
 
 如果网站显示机器人验证，脚本会自动暂停。请在打开的 Chrome 中手动完成，确认页面已
 回到 Auto.ru 后，再回 PowerShell 按 Enter，脚本会继续托管。该流程不会自动规避或

@@ -10,6 +10,7 @@ from typing import Any
 
 
 TABLE_EXTENSIONS = (".tsv", ".csv", ".xlsx", ".xlsm")
+DELIMITED_TABLE_EXTENSIONS = (".tsv", ".csv")
 PATH_KEYS = {
     "input",
     "output",
@@ -53,6 +54,16 @@ def discover_input_file(value: str | Path) -> Path:
     if path.is_file():
         return path
     if not path.exists():
+        # CSV and TSV are interchangeable inputs throughout the scrapers.  When
+        # configuration still names the old format, accept a same-stem sibling
+        # written in the other format (for example catalog.csv -> catalog.tsv).
+        if path.suffix.casefold() in DELIMITED_TABLE_EXTENSIONS:
+            for suffix in DELIMITED_TABLE_EXTENSIONS:
+                if suffix == path.suffix.casefold():
+                    continue
+                alternative = path.with_suffix(suffix)
+                if alternative.is_file():
+                    return alternative
         raise FileNotFoundError(f"输入不存在：{path}")
     if not path.is_dir():
         raise RuntimeError(f"输入必须是表格文件或目录：{path}")

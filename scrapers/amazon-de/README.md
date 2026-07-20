@@ -11,12 +11,17 @@
 
 ## 安装
 
-在本目录打开 PowerShell：
+在仓库根目录打开 PowerShell，并创建共用虚拟环境（首次运行时执行）：
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r .\scrapers\amazon-de\requirements.txt
 cd .\scrapers\amazon-de
-python -m pip install -r requirements.txt
 ```
+
+以后重新打开 PowerShell 时，只需先在仓库根目录运行
+`.\.venv\Scripts\Activate.ps1`，无需重复安装依赖。
 
 Selenium 4 会通过 Selenium Manager 自动查找 Chrome 和匹配的驱动。
 

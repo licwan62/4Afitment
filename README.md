@@ -10,7 +10,19 @@
 
 ## 快速开始
 
-进入需要运行的子项目，再按该目录的 `README.md` 安装依赖和执行脚本。
+先在仓库根目录创建共用的 Python 虚拟环境（只需执行一次）：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r .\scrapers\amazon-de\requirements.txt
+```
+
+两个 Python 子项目目前使用相同的依赖，因此共用根目录的 `.venv`。以后重新打开
+PowerShell 后，只需在仓库根目录执行 `.\.venv\Scripts\Activate.ps1`；VS Code 也会
+自动选择这个环境。
+
+激活虚拟环境后，进入需要运行的子项目，再按该目录的 `README.md` 执行脚本。
 
 ```powershell
 # 4AFitment
@@ -19,12 +31,10 @@ cd .\scrapers\4afitment
 
 # Amazon.de
 cd ..\amazon-de
-python -m pip install -r requirements.txt
 python .\amazon_de_fitment_scraper.py
 
 # Auto.ru
 cd ..\auto-ru
-python -m pip install -r requirements.txt
 python .\auto_ru_dimensions_scraper.py --delay 10 --cooldown-every 20 --cooldown-seconds 20
 ```
 
