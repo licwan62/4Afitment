@@ -21,8 +21,8 @@ model_sales:
   log: ../log/auto_ru_model_sales.log
   max: 0
   max_models: 0
-  cooldown_every: 10
-  cooldown_seconds: 10
+  cooldown_every: 1
+  cooldown_seconds: 5
 
 gallery_image:
   input: ../output/auto_ru_catalog_rank.csv
