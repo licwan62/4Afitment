@@ -7,7 +7,7 @@
 - 嵌套遍历车型
 - 每个组合点击搜索
 - 点击“复制车型数据”
-- 把复制出来的内容追加保存为 Markdown
+- 把复制出来的内容按 `year / make / model` 三列追加保存为 TSV
 
 它不会把账号密码写进代码。第一次运行登录脚本时，会打开浏览器，你手动登录后按回车，项目会把登录状态保存在本机 `.auth/profile` 目录里。
 
@@ -35,7 +35,7 @@ cd D:\Home\Scripts\4Afitment\scrapers\4afitment
 
 结果会输出到：
 
-- `output/fitment_data.md`
+- `output/fitment_data.tsv`
 - `output/checkpoint.json`
 - `output/network.jsonl`
 
@@ -180,7 +180,7 @@ BMW	X5
 
 ## 断点续跑
 
-抓取过程中会持续写 `output/checkpoint.json`。如果中断，再运行 `src/scrape.js` 会跳过已经复制过的制造商 / 车型组合。
+抓取过程中会持续追加 `output/fitment_data.tsv` 并写入 `output/checkpoint.json`。如果中断，再运行 `src/scrape.js` 会跳过已经复制过的制造商 / 车型组合。
 
 ## 说明
 

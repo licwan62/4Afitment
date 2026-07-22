@@ -216,11 +216,11 @@ export async function chooseOption(page, selector, option) {
   const tag = await locator.evaluate((el) => el.tagName.toLowerCase());
 
   if (tag === "select") {
-    if (option.value) {
-      await locator.selectOption(option.value);
-    } else {
-      await locator.selectOption({ label: option.text });
-    }
+    // Option values are site-generated IDs and can change between runs. Text is
+    // stable, so resolve the current value from the live dropdown before selecting.
+    if (option.text) await locator.selectOption({ label: option.text });
+    else if (option.value) await locator.selectOption(option.value);
+    else throw new Error(`控件 ${selector} 的选项缺少 text 和 value`);
     return;
   }
 
@@ -230,11 +230,26 @@ export async function chooseOption(page, selector, option) {
 
 export async function chooseOptionIfNeeded(page, selector, option) {
   const current = await getSelectedOption(page, selector);
-  if (current.value && option.value && current.value === option.value) return false;
-  if (current.text && option.text && current.text === option.text) return false;
+  if (option.text && normalizeOptionText(current.text) === normalizeOptionText(option.text)) return false;
+  if (!option.text && current.value && option.value && current.value === option.value) return false;
 
   await chooseOption(page, selector, option);
   return true;
+}
+
+export async function waitForOptionsRefresh(page, selector, previousOptions = [], timeoutMs = 15000) {
+  const previousSignature = optionsSignature(previousOptions);
+  const deadline = Date.now() + timeoutMs;
+  let latest = [];
+
+  do {
+    latest = await getOptions(page, selector);
+    if (latest.length && optionsSignature(latest) !== previousSignature) return latest;
+    await page.waitForTimeout(200);
+  } while (Date.now() < deadline);
+
+  if (latest.length) return latest;
+  throw new Error(`控件 ${selector} 在 ${timeoutMs}ms 内没有加载出选项`);
 }
 
 export async function chooseOptionText(page, selector, text) {
@@ -280,4 +295,12 @@ export async function getSelectedOption(page, selector) {
 
 function escapeRegExp(text) {
   return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeOptionText(value) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase("en");
+}
+
+function optionsSignature(options) {
+  return options.map((option) => `${option.value ?? ""}\t${normalizeOptionText(option.text)}`).join("\n");
 }

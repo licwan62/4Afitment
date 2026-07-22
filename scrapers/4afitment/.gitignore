@@ -1,8 +1,5 @@
-input/*
 !input/.gitkeep
-output/*
 !output/.gitkeep
-log/*
 !log/.gitkeep
 .auth/
 node_modules/

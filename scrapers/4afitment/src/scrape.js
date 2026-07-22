@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { openBrowser } from "./browser.js";
 import {
@@ -8,9 +7,10 @@ import {
   findButton,
   findControl,
   findYearRangeControls,
-  getOptions
+  getOptions,
+  waitForOptionsRefresh
 } from "./dom.js";
-import { appendJsonLine, readJson, writeJson } from "./io.js";
+import { appendJsonLine, appendTsv, ensureTsv, parseCopiedTsv, readJson, writeJson } from "./io.js";
 
 let restartCount = 0;
 const maxRestarts = 5;
@@ -39,7 +39,7 @@ async function runPass() {
     const modelsByManufacturer = checkpoint.modelsByManufacturer ?? {};
 
     if (fs.existsSync(config.requestLogFile)) fs.rmSync(config.requestLogFile);
-    ensureMarkdownHeader(config);
+    ensureTsv(config.tsvFile, ["year", "make", "model"]);
 
     page.on("response", async (response) => {
       const url = response.url();
@@ -86,13 +86,9 @@ async function runPass() {
     const changedYearTo = await chooseOptionTextIfNeeded(page, yearSelectors.to, config.yearRange.to);
     if (changedYearTo) await page.waitForTimeout(config.timeouts.settleMs);
 
-    const manufacturers = Array.isArray(checkpoint.manufacturers) && checkpoint.manufacturers.length
-      ? checkpoint.manufacturers
-      : await getOptions(page, manufacturerSelector);
-    if (!checkpoint.manufacturers?.length) {
-      checkpoint.manufacturers = manufacturers;
-      saveCheckpoint(config, checkpoint, completed, failed);
-    }
+    const manufacturers = await getOptions(page, manufacturerSelector);
+    checkpoint.manufacturers = manufacturers;
+    saveCheckpoint(config, checkpoint, completed, failed);
     console.log(`制造商数量：${manufacturers.length}`);
 
     for (const manufacturer of manufacturers) {
@@ -102,15 +98,16 @@ async function runPass() {
         continue;
       }
 
+      const previousModels = await getOptions(page, modelSelector).catch(() => []);
       const changedManufacturer = await chooseOptionIfNeeded(page, manufacturerSelector, manufacturer);
       if (changedManufacturer) await page.waitForTimeout(config.timeouts.settleMs);
 
-      if (!models.length) {
-        models = await getOptions(page, modelSelector);
-        modelsByManufacturer[manufacturer.text] = models;
-        checkpoint.modelsByManufacturer = modelsByManufacturer;
-        saveCheckpoint(config, checkpoint, completed, failed, { currentManufacturer: manufacturer.text });
-      }
+      models = changedManufacturer
+        ? await waitForOptionsRefresh(page, modelSelector, previousModels, config.timeouts.dropdownMs)
+        : await getOptions(page, modelSelector);
+      modelsByManufacturer[manufacturer.text] = models;
+      checkpoint.modelsByManufacturer = modelsByManufacturer;
+      saveCheckpoint(config, checkpoint, completed, failed, { currentManufacturer: manufacturer.text });
       console.log(`${manufacturer.text}: 车型数量 ${models.length}`);
 
       for (const model of models) {
@@ -131,11 +128,21 @@ async function runPass() {
           await page.waitForTimeout(300);
 
           const copied = await readClipboardText(page);
-          appendMarkdownSection(config, {
-            manufacturer: manufacturer.text,
-            model: model.text,
-            content: copied
-          });
+          const rows = parseCopiedTsv(copied);
+          if (!rows.length) {
+            throw new Error("复制结果中没有有效的 year / manufacturer / model 数据行");
+          }
+          const mismatched = rows.find((row) => (
+            normalizeLabel(row.make) !== normalizeLabel(manufacturer.text)
+            || normalizeLabel(row.model) !== normalizeLabel(model.text)
+          ));
+          if (mismatched) {
+            throw new Error(
+              `剪贴板数据与当前选择不一致：期望 ${manufacturer.text} / ${model.text}，`
+              + `实际 ${mismatched.make} / ${mismatched.model}`
+            );
+          }
+          appendTsv(config.tsvFile, ["year", "make", "model"], rows);
 
           completed.add(key);
           failed.delete(key);
@@ -160,7 +167,7 @@ async function runPass() {
     }
 
     saveCheckpoint(config, checkpoint, completed, failed, { completedAt: new Date().toISOString() });
-    console.log(`完成：${completed.size} 个制造商/车型组合，已写入 ${config.markdownFile}`);
+    console.log(`完成：${completed.size} 个制造商/车型组合，已写入 ${config.tsvFile}`);
   } finally {
     await context.close().catch(() => {});
   }
@@ -168,6 +175,10 @@ async function runPass() {
 
 function rowKey(manufacturer, model) {
   return `${manufacturer}\t${model}`;
+}
+
+function normalizeLabel(value) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase("en");
 }
 
 function saveCheckpoint(config, checkpoint, completed, failed, extra = {}) {
@@ -179,42 +190,6 @@ function saveCheckpoint(config, checkpoint, completed, failed, extra = {}) {
     updatedAt: new Date().toISOString(),
     ...extra
   });
-}
-
-function ensureMarkdownHeader(config) {
-  fs.mkdirSync(path.dirname(config.markdownFile), { recursive: true });
-  if (fs.existsSync(config.markdownFile)) return;
-
-  fs.writeFileSync(
-    config.markdownFile,
-    [
-      "# 4AFitment Copied Vehicle Data",
-      "",
-      `Year range: ${config.yearRange.from} - ${config.yearRange.to}`,
-      "",
-      `Generated at: ${new Date().toISOString()}`,
-      ""
-    ].join("\n"),
-    "utf8"
-  );
-}
-
-function appendMarkdownSection(config, { manufacturer, model, content }) {
-  const safeContent = String(content || "").replaceAll("```", "`\\`\\`");
-  const block = [
-    "",
-    `## ${manufacturer} / ${model}`,
-    "",
-    `- Year range: ${config.yearRange.from} - ${config.yearRange.to}`,
-    `- Copied at: ${new Date().toISOString()}`,
-    "",
-    "```text",
-    safeContent.trim(),
-    "```",
-    ""
-  ].join("\n");
-
-  fs.appendFileSync(config.markdownFile, block, "utf8");
 }
 
 async function readClipboardText(page) {

@@ -18,6 +18,7 @@ export function loadConfig(requestedPath = "") {
     "outputDir",
     "inputTsvFile",
     "checkpointFile",
+    "tsvFile",
     "markdownFile",
     "tsvCheckpointFile",
     "tsvMarkdownFile",

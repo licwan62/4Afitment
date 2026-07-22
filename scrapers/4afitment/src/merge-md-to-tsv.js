@@ -36,33 +36,33 @@ console.log(`输出：${outputFile}`);
 console.log(`记录数：${rows.length}`);
 
 function extractRows(markdownText) {
-  const blocks = [...markdownText.matchAll(/```(?:text|tsv)?\s*\r?\n([\s\S]*?)```/gi)]
-    .map((match) => match[1]);
-
   const seen = new Set();
   const rows = [];
+  let inDataBlock = false;
 
-  for (const block of blocks) {
-    for (const line of block.split(/\r?\n/)) {
-      if (!line.trim()) continue;
-
-      const cells = trimTrailingEmptyCells(line.split("\t").map((cell) => cell.trim()));
-      if (cells.length < 3) continue;
-
-      const row = {
-        year: cells[0],
-        make: cells[1],
-        model: cells[2]
-      };
-
-      if (!/^\d{4}$/.test(row.year)) continue;
-
-      const key = `${row.year}\t${row.make}\t${row.model}`;
-      if (seen.has(key)) continue;
-
-      seen.add(key);
-      rows.push(row);
+  for (const line of markdownText.split(/\r?\n/)) {
+    if (/^```(?:text|tsv)?\s*$/i.test(line)) {
+      inDataBlock = !inDataBlock;
+      continue;
     }
+    if (!inDataBlock || !line.trim()) continue;
+
+    const cells = trimTrailingEmptyCells(line.split("\t").map((cell) => cell.trim()));
+    if (cells.length < 3) continue;
+
+    const row = {
+      year: cells[0],
+      make: cells[1],
+      model: cells[2]
+    };
+
+    if (!/^\d{4}$/.test(row.year)) continue;
+
+    const key = `${row.year}\t${row.make}\t${row.model}`;
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    rows.push(row);
   }
 
   rows.sort((a, b) => {

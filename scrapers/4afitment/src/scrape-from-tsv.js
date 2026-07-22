@@ -10,7 +10,8 @@ import {
   findButton,
   findControl,
   findYearRangeControls,
-  getOptions
+  getOptions,
+  waitForOptionsRefresh
 } from "./dom.js";
 import { appendJsonLine, csvEscape, readJson, writeJson } from "./io.js";
 
@@ -153,15 +154,16 @@ async function runPass() {
         && isDoneOrSkipped(completed, skip.keys, rowKey(manufacturer.text, entry.model));
       if (requestedModelsAlreadyDone) continue;
 
+      const previousModels = await getOptions(page, modelSelector).catch(() => []);
       const changedManufacturer = await chooseOptionIfNeeded(page, manufacturerSelector, manufacturer);
       if (changedManufacturer) await page.waitForTimeout(config.timeouts.settleMs);
 
-      if (!models.length) {
-        models = await getOptions(page, modelSelector);
-        modelsByManufacturer[manufacturer.text] = models;
-        checkpoint.modelsByManufacturer = modelsByManufacturer;
-        saveCheckpoint(config, checkpoint, completed, failed, notFound, { currentManufacturer: manufacturer.text });
-      }
+      models = changedManufacturer
+        ? await waitForOptionsRefresh(page, modelSelector, previousModels, config.timeouts.dropdownMs)
+        : await getOptions(page, modelSelector);
+      modelsByManufacturer[manufacturer.text] = models;
+      checkpoint.modelsByManufacturer = modelsByManufacturer;
+      saveCheckpoint(config, checkpoint, completed, failed, notFound, { currentManufacturer: manufacturer.text });
 
       const targetModels = needsAllModels
         ? models

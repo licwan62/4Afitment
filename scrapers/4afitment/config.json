@@ -6,7 +6,7 @@
   "outputDir": "output",
   "inputTsvFile": "input/carlist.tsv",
   "checkpointFile": "output/checkpoint.json",
-  "markdownFile": "output/fitment_data.md",
+  "tsvFile": "output/fitment_data.tsv",
   "tsvCheckpointFile": "output/from_tsv_checkpoint.json",
   "tsvMarkdownFile": "output/from_tsv.md",
   "tsvSummaryFile": "output/from_tsv_summary.md",

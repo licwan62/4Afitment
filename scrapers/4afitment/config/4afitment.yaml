@@ -6,7 +6,7 @@ common:
   outputDir: ../output
   inputTsvFile: ../input
   checkpointFile: ../output/checkpoint.json
-  markdownFile: ../output/fitment_data.md
+  tsvFile: ../output/fitment_data.tsv
   tsvCheckpointFile: ../output/from_tsv_checkpoint.json
   tsvMarkdownFile: ../output/from_tsv.csv
   tsvSummaryFile: ../output/from_tsv_summary.csv
@@ -29,13 +29,13 @@ scrape:
     searchButton: []
     copyButton: []
   labels:
-    year: [year]
-    yearFrom: [from year, start year, year from]
-    yearTo: [to year, end year, year to]
-    manufacturer: [manufacturer, make, brand]
-    model: [model]
-    searchButton: [search]
-    copyButton: [copy vehicle data, copy fitment, copy]
+    year: [year, 年份]
+    yearFrom: [from year, start year, year from, 开始年份, 起始年份, 年份]
+    yearTo: [to year, end year, year to, 结束年份, 截止年份, 年份]
+    manufacturer: [manufacturer, make, brand, 制造商, 品牌, 厂商]
+    model: [model, 车型]
+    searchButton: [search, 查询, 搜索]
+    copyButton: [copy vehicle data, copy fitment, copy, 复制车型数据, 复制]
   timeouts:
     pageLoadMs: 60000
     dropdownMs: 15000
