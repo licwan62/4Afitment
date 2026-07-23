@@ -10,7 +10,16 @@ import {
   getOptions,
   waitForOptionsRefresh
 } from "./dom.js";
-import { appendJsonLine, appendTsv, ensureTsv, parseCopiedTsv, readJson, writeJson } from "./io.js";
+import {
+  appendJsonLine,
+  appendTsv,
+  ensureTsv,
+  moveUnknownFailedToInvalid,
+  normalizeCheckpointQueues,
+  parseCopiedTsv,
+  readJson,
+  writeJson
+} from "./io.js";
 
 let restartCount = 0;
 const maxRestarts = 5;
@@ -36,7 +45,13 @@ async function runPass() {
     const checkpoint = readJson(config.checkpointFile, { completed: [], failed: [], manufacturers: [], modelsByManufacturer: {} });
     const completed = new Set(checkpoint.completed ?? []);
     const failed = new Set(checkpoint.failed ?? []);
+    const invalidFailed = new Set(checkpoint.invalidFailed ?? []);
+    normalizeCheckpointQueues(completed, failed, invalidFailed);
+    checkpoint.invalidFailed = [...invalidFailed];
     const modelsByManufacturer = checkpoint.modelsByManufacturer ?? {};
+    const failedManufacturers = new Set(
+      [...failed].map((key) => key.split("\t", 1)[0]).filter(Boolean)
+    );
 
     if (fs.existsSync(config.requestLogFile)) fs.rmSync(config.requestLogFile);
     ensureTsv(config.tsvFile, ["year", "make", "model"]);
@@ -94,7 +109,11 @@ async function runPass() {
     for (const manufacturer of manufacturers) {
       assertPageOpen(page);
       let models = modelsByManufacturer[manufacturer.text] ?? [];
-      if (models.length && models.every((model) => completed.has(rowKey(manufacturer.text, model.text)))) {
+      if (
+        models.length
+        && !failedManufacturers.has(manufacturer.text)
+        && models.every((model) => completed.has(rowKey(manufacturer.text, model.text)))
+      ) {
         continue;
       }
 
@@ -154,6 +173,7 @@ async function runPass() {
           console.log(`已复制：${manufacturer.text} / ${model.text}`);
         } catch (error) {
           if (isBrowserClosedError(error)) throw error;
+          if (completed.has(key)) throw error;
 
           failed.add(key);
           saveCheckpoint(config, checkpoint, completed, failed, {
@@ -166,8 +186,18 @@ async function runPass() {
       }
     }
 
-    saveCheckpoint(config, checkpoint, completed, failed, { completedAt: new Date().toISOString() });
-    console.log(`完成：${completed.size} 个制造商/车型组合，已写入 ${config.tsvFile}`);
+    moveUnknownFailedToInvalid(failed, invalidFailed, modelsByManufacturer, manufacturers);
+    normalizeCheckpointQueues(completed, failed, invalidFailed);
+    checkpoint.invalidFailed = [...invalidFailed];
+
+    const finishedAt = new Date().toISOString();
+    saveCheckpoint(config, checkpoint, completed, failed, failed.size
+      ? { lastPassAt: finishedAt }
+      : { completedAt: finishedAt });
+    console.log(
+      `完成：${completed.size} 个组合，失败 ${failed.size} 个，`
+      + `无效历史失败 ${invalidFailed.size} 个，已写入 ${config.tsvFile}`
+    );
   } finally {
     await context.close().catch(() => {});
   }
@@ -182,11 +212,15 @@ function normalizeLabel(value) {
 }
 
 function saveCheckpoint(config, checkpoint, completed, failed, extra = {}) {
+  const invalidFailed = new Set(checkpoint.invalidFailed ?? []);
+  normalizeCheckpointQueues(completed, failed, invalidFailed);
+  checkpoint.invalidFailed = [...invalidFailed];
   writeJson(config.checkpointFile, {
     manufacturers: checkpoint.manufacturers ?? [],
     modelsByManufacturer: checkpoint.modelsByManufacturer ?? {},
     completed: [...completed],
     failed: [...failed],
+    invalidFailed: checkpoint.invalidFailed,
     updatedAt: new Date().toISOString(),
     ...extra
   });

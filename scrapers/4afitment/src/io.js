@@ -6,9 +6,98 @@ export function readJson(file, fallback) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-export function writeJson(file, value) {
+const RETRYABLE_WRITE_ERROR_CODES = new Set([
+  "EACCES",
+  "EBUSY",
+  "EMFILE",
+  "ENFILE",
+  "EPERM",
+  "UNKNOWN"
+]);
+
+export function writeJson(file, value, { attempts = 8, retryDelayMs = 50 } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const content = `${JSON.stringify(value, null, 2)}\n`;
+  let lastError;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const temporaryFile = path.join(
+      path.dirname(file),
+      `.${path.basename(file)}.${process.pid}.${Date.now()}.${attempt}.tmp`
+    );
+
+    try {
+      const handle = fs.openSync(temporaryFile, "wx");
+      try {
+        fs.writeFileSync(handle, content, "utf8");
+        fs.fsyncSync(handle);
+      } finally {
+        fs.closeSync(handle);
+      }
+
+      fs.renameSync(temporaryFile, file);
+      return;
+    } catch (error) {
+      lastError = error;
+      try {
+        fs.rmSync(temporaryFile, { force: true });
+      } catch {
+        // A scanner may briefly hold the temporary file too; the next run can ignore it.
+      }
+
+      if (!RETRYABLE_WRITE_ERROR_CODES.has(error?.code) || attempt === attempts) {
+        throw error;
+      }
+
+      sleepSync(retryDelayMs * attempt);
+    }
+  }
+
+  throw lastError;
+}
+
+export function normalizeCheckpointQueues(completed, failed, invalidFailed) {
+  for (const key of completed) {
+    failed.delete(key);
+    invalidFailed?.delete(key);
+  }
+  if (invalidFailed) {
+    for (const key of failed) {
+      invalidFailed.delete(key);
+    }
+  }
+}
+
+export function moveUnknownFailedToInvalid(
+  failed,
+  invalidFailed,
+  modelsByManufacturer,
+  manufacturers = Object.keys(modelsByManufacturer)
+) {
+  const knownManufacturers = new Set(
+    manufacturers.map((manufacturer) => (
+      typeof manufacturer === "string" ? manufacturer : manufacturer.text
+    ))
+  );
+  const knownKeys = new Set();
+  for (const [manufacturer, models] of Object.entries(modelsByManufacturer)) {
+    if (!knownManufacturers.has(manufacturer)) continue;
+    for (const model of models) {
+      knownKeys.add(`${manufacturer}\t${model.text}`);
+    }
+  }
+
+  for (const key of failed) {
+    if (!knownKeys.has(key)) {
+      failed.delete(key);
+      invalidFailed.add(key);
+    }
+  }
+}
+
+function sleepSync(milliseconds) {
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(signal, 0, 0, milliseconds);
 }
 
 export function appendJsonLine(file, value) {

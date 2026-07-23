@@ -13,7 +13,7 @@ import {
   getOptions,
   waitForOptionsRefresh
 } from "./dom.js";
-import { appendJsonLine, csvEscape, readJson, writeJson } from "./io.js";
+import { appendJsonLine, csvEscape, normalizeCheckpointQueues, readJson, writeJson } from "./io.js";
 
 const cli = parseArgs(process.argv.slice(2));
 let restartCount = 0;
@@ -63,6 +63,7 @@ async function runPass() {
     });
     const completed = new Set(checkpoint.completed ?? []);
     const failed = new Set(checkpoint.failed ?? []);
+    normalizeCheckpointQueues(completed, failed);
     const notFound = checkpoint.notFound ?? [];
     const modelsByManufacturer = checkpoint.modelsByManufacturer ?? {};
 
@@ -224,6 +225,7 @@ async function runPass() {
           console.log(`已复制：${manufacturer.text} / ${model.text}`);
         } catch (error) {
           if (isBrowserClosedError(error)) throw error;
+          if (completed.has(key)) throw error;
 
           failed.add(key);
           appendJsonLine(config.requestLogFile, { time: new Date().toISOString(), event: "row_failed", make: manufacturer.text, model: model.text, reason: error.message });
@@ -441,6 +443,7 @@ function isDoneOrSkipped(completed, skipKeys, key) {
 }
 
 function saveCheckpoint(config, checkpoint, completed, failed, notFound, extra = {}) {
+  normalizeCheckpointQueues(completed, failed);
   writeJson(config.tsvCheckpointFile, {
     modelsByManufacturer: checkpoint.modelsByManufacturer ?? {},
     completed: [...completed],

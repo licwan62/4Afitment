@@ -70974,11 +70974,11 @@
         "text": "Crossmax 220"
       },
       {
-        "value": "35355",
+        "value": "28727",
         "text": "Crossmax 250"
       },
       {
-        "value": "28727",
+        "value": "35355",
         "text": "Crossmax 250"
       },
       {
@@ -72978,11 +72978,11 @@
         "text": "Aero Falcon"
       },
       {
-        "value": "21114",
+        "value": "21115",
         "text": "Aero Lark"
       },
       {
-        "value": "21115",
+        "value": "21114",
         "text": "Aero Lark"
       },
       {
@@ -73102,11 +73102,11 @@
         "text": "MB"
       },
       {
-        "value": "4999",
+        "value": "5709",
         "text": "Model 37"
       },
       {
-        "value": "5709",
+        "value": "4999",
         "text": "Model 37"
       },
       {
@@ -93868,14 +93868,7 @@
     "Ski-Doo\tSkandic SWT E-TEC 600 HO",
     "Ski-Doo\tSkandic SWT E-TEC 600R",
     "Ski-Doo\tSummit 800 X 154",
-    "Ski-Doo\tSummit 800 X 159"
-  ],
-  "failed": [
-    "Cord\tAce",
-    "INFINITI\tGrenadier Quartermaster",
-    "Cord\tBeacon",
-    "Cord\tFlyer",
-    "INFINITI\tGrenadier",
+    "Ski-Doo\tSummit 800 X 159",
     "Polaris\tTrail Touring DLX",
     "Polaris\tTrail WideTrak",
     "Polaris\tTran Sport",
@@ -94203,7 +94196,6 @@
     "Saab\t9-5",
     "Saab\t9-7x",
     "Saab\t900",
-    "Saab\t9000",
     "Saab\t92",
     "Saab\t92B",
     "Saab\t93",
@@ -94400,6 +94392,7 @@
     "Sea-Doo\tGTX Limited 215",
     "Sea-Doo\tGTX Limited 230",
     "Sea-Doo\tGTX Limited 300",
+    "Saab\t9000",
     "Sea-Doo\tGTX Limited 325",
     "Sea-Doo\tGTX Limited iS 255",
     "Sea-Doo\tGTX Limited iS 260",
@@ -98200,7 +98193,14 @@
     "Zontes\tX1 350 ABS",
     "Zundapp\tJanus 250"
   ],
-  "updatedAt": "2026-07-23T00:49:39.761Z",
-  "currentManufacturer": "Ski-Doo",
-  "currentModel": "Summit 800 X 159"
+  "failed": [],
+  "invalidFailed": [
+    "Cord\tAce",
+    "INFINITI\tGrenadier Quartermaster",
+    "Cord\tBeacon",
+    "Cord\tFlyer",
+    "INFINITI\tGrenadier"
+  ],
+  "updatedAt": "2026-07-23T05:33:41.137Z",
+  "completedAt": "2026-07-23T05:33:41.137Z"
 }
