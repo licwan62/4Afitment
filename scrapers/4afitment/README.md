@@ -16,7 +16,26 @@
 在 PowerShell 里进入项目目录：
 
 ```powershell
-cd D:\Home\Scripts\4Afitment\scrapers\4afitment
+cd D:\Licheng\Repo\4Afitment\scrapers\4afitment
+```
+
+### 初始化
+
+这是一个 Node.js 项目，依赖由 `package.json` 和 `package-lock.json` 管理。请先确认已安装 Node.js 和 npm，然后执行：
+
+```powershell
+npm ci
+npx playwright install chromium
+```
+
+不要运行 `python -m pip install -r requirements.txt`；`playwright`、`read-excel-file` 和 `yaml` 在本项目中都是 npm 依赖，不是 Python 依赖。
+
+可以用下面的命令确认环境和依赖是否可用：
+
+```powershell
+node --version
+npm --version
+npx playwright --version
 ```
 
 第一次先登录：
